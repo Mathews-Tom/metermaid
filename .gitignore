@@ -212,3 +212,12 @@ __marimo__/
 # metermaid
 .metermaid/
 *.csv
+
+# Agentic Systems
+.agent
+.claude/
+.gemini
+.opencode/
+
+# Developer workspace
+.docs/

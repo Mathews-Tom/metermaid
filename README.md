@@ -2,7 +2,7 @@
 
 Background usage tracker for Claude Code and Codex CLI sessions.
 
-Polls active session directories, extracts token usage, context window state, cost data, and timing from JSONL transcripts, then writes deduplicated snapshots to per-session CSV files. One file per session — no shared read-modify-write, safe across multiple terminals/tabs/windows. Works on macOS, Linux, Windows, and WSL. Zero dependencies.
+Polls active session directories, extracts token usage, context window state, cost data, and timing from JSONL transcripts, then writes deduplicated snapshots to per-session CSV files. One file per session — no shared read-modify-write, safe across multiple terminals/tabs/windows. Works on macOS, Linux, Windows, and WSL.
 
 ## Install
 
@@ -16,7 +16,7 @@ Or from source:
 uv tool install -e .
 ```
 
-Requires Python 3.11+. No dependencies beyond stdlib.
+Requires Python 3.11+. Single dependency: `rich`.
 
 ## Quick start
 
@@ -58,6 +58,8 @@ metermaid backfill --dry-run     # preview without writing
 
 ### Report
 
+Shows session summary with sparkline trends, cache hit rate, cost-per-line, week-over-week comparison, cost windows, budget gauge (if configured), and actionable nudges.
+
 ```bash
 metermaid report                 # all time
 metermaid report --window 7d     # last 7 days
@@ -66,12 +68,95 @@ metermaid report --provider claude
 metermaid report --session abc123
 ```
 
+Report includes:
+
+- Token and cost totals with 7-day Unicode sparkline trends (`▁▂▃▄▅▆▇█`)
+- Cache hit rate color-coded by threshold (green >70%, yellow 40–70%, red <40%)
+- Cost per line changed (`total_cost / lines_changed`)
+- Week-over-week comparison with delta arrows
+- Cost windows (5h / 7d / 30d)
+- Budget gauge and end-of-month forecast (when configured)
+- Actionable nudges: cache hit drops, cost spikes, context pressure warnings
+
 ### Export
+
+Export session data in multiple formats.
 
 ```bash
 metermaid export --window 30d --out export.csv
-metermaid export --provider codex --out codex.csv
+metermaid export --format json --out report.json
+metermaid export --format markdown --out report.md
+metermaid export --format html --out report.html
+metermaid export --format otlp --out metrics.json
 ```
+
+| Format     | Description                                            |
+| ---------- | ------------------------------------------------------ |
+| `csv`      | Raw snapshot rows (default)                            |
+| `json`     | Typed fields (numerics, not all strings)               |
+| `markdown` | Summary stats + session table for PR comments or Slack |
+| `html`     | Standalone report with inline CSS                      |
+| `otlp`     | OpenTelemetry-compatible JSON for Prometheus/Grafana   |
+
+### Heatmap
+
+GitHub-style contributions calendar in the terminal.
+
+```bash
+metermaid heatmap                        # cost by default, last 365 days
+metermaid heatmap --metric tokens        # token volume
+metermaid heatmap --metric sessions      # session count
+metermaid heatmap --days 90              # last 90 days
+```
+
+### Consolidate
+
+Aggregate data into time-windowed summaries with derived metrics (cost/hour, token efficiency, cost/kTok output).
+
+```bash
+metermaid consolidate                    # daily aggregates
+metermaid consolidate --window week      # weekly
+metermaid consolidate --window month     # monthly
+metermaid consolidate --summary          # Claude vs Codex comparison
+```
+
+### MCP server
+
+Expose usage stats as an MCP (Model Context Protocol) server over stdin/stdout. Allows AI assistants to query your usage data programmatically.
+
+```bash
+metermaid mcp
+```
+
+Available tools:
+
+- `get_usage_summary` — aggregate stats (sessions, tokens, cost, cache hit rate)
+- `get_session_list` — per-session details with optional time window filter
+- `get_cost_windows` — cost totals for 5h, 7d, and 30d windows
+
+### Migrate
+
+Copy data from a previous `~/.codetrack/` installation.
+
+```bash
+metermaid migrate
+```
+
+## Budget tracking
+
+Create `~/.metermaid/config.toml` to enable budget monitoring in reports:
+
+```toml
+[budget]
+monthly_usd = 150.00
+alert_thresholds = [50, 75, 90, 100]
+
+[budget.provider]
+claude = 100.00
+codex = 50.00
+```
+
+Reports will show a progress bar, end-of-month cost forecast, and threshold alerts when spending crosses configured percentages.
 
 ## Session discovery
 
@@ -88,16 +173,16 @@ Auto-discovers sessions with no configuration:
 
 Each snapshot records:
 
-| Field                              | Source                                    |
-| ---------------------------------- | ----------------------------------------- |
-| `tokens_in`, `tokens_out`          | Cumulative input/output tokens            |
-| `cache_read`, `cache_write`        | Prompt cache usage                        |
-| `cost_usd`                         | `costUSD` from transcript (Claude Code)   |
-| `ctx_pct`, `ctx_tokens`, `ctx_max` | Context window utilization                |
-| `wall_sec`                         | Wall clock time (first to last timestamp) |
-| `api_sec`                          | API latency (statusLine hook only)        |
-| `diff_add`, `diff_del`             | Lines added/removed (statusLine hook only)|
-| `model`, `provider`, `session_id`  | Session identification                    |
+| Field                              | Source                                     |
+| ---------------------------------- | ------------------------------------------ |
+| `tokens_in`, `tokens_out`          | Cumulative input/output tokens             |
+| `cache_read`, `cache_write`        | Prompt cache usage                         |
+| `cost_usd`                         | `costUSD` from transcript (Claude Code)    |
+| `ctx_pct`, `ctx_tokens`, `ctx_max` | Context window utilization                 |
+| `wall_sec`                         | Wall clock time (first to last timestamp)  |
+| `api_sec`                          | API latency (statusLine hook only)         |
+| `diff_add`, `diff_del`             | Lines added/removed (statusLine hook only) |
+| `model`, `provider`, `session_id`  | Session identification                     |
 
 ## Storage
 
@@ -107,15 +192,13 @@ Per-session CSV files at `~/.metermaid/sessions/{provider}_{session_id}.csv`. Ea
 ~/.metermaid/
   sessions/
     claude_a1b2c3d4e5f6.csv
-    claude_f7e8d9c0b1a2.csv
     codex_session1234.csv
+  state/
+    claude_a1b2c3d4e5f6.state
+  config.toml
   metermaid.pid
   metermaid.log
 ```
-
-## Cost tracking
-
-metermaid captures `costUSD` when present in Claude Code transcripts but does not estimate cost from tokens. For detailed cost breakdowns across providers, use [ccusage](https://ccusage.com).
 
 ## How it works
 
@@ -126,7 +209,7 @@ metermaid captures `costUSD` when present in Claude Code transcripts but does no
 
 ## Advanced: statusLine hook
 
-The watcher gets all data from JSONL transcripts. For additional fields (`api_sec`, `diff_add`, `diff_del`), you can manually configure Claude Code's statusLine to pipe through metermaid:
+The watcher gets all data from JSONL transcripts. For additional fields (`api_sec`, `diff_add`, `diff_del`), configure Claude Code's statusLine to pipe through metermaid:
 
 Add to `~/.claude/settings.json`:
 
