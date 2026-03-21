@@ -13,7 +13,8 @@ from pathlib import Path
 from rich.console import Console
 
 from .backfill import backfill
-from .consolidate import aggregate, provider_comparison, write_aggregate_csv
+from .compare import provider_comparison
+from .consolidate import aggregate, write_aggregate_csv
 from .csv_io import read_all_snapshots
 from .hook import handle_claude_hook
 from .models import CSV_HEADERS, METERMAID_HOME, DEFAULT_INTERVAL, PID_FILE, SESSIONS_DIR

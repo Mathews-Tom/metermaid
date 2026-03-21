@@ -1,4 +1,4 @@
-"""Reporting — report, session_table, cost_windows, filtering."""
+"""Reporting — report, session_table, filtering."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 
 from rich.console import Console
 from rich.table import Table
+
+from .trends import cost_windows, trend_block, week_over_week
 
 console = Console()
 
@@ -51,6 +53,19 @@ def latest_per_session(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return list(best.values())
 
 
+def _cache_hit_pct(cache_read: int, tokens_in: int) -> float:
+    total = tokens_in + cache_read
+    return (cache_read / total * 100) if total > 0 else 0.0
+
+
+def _color_cache(pct: float) -> str:
+    if pct >= 70:
+        return f"[green]{pct:.0f}%[/green]"
+    if pct >= 40:
+        return f"[yellow]{pct:.0f}%[/yellow]"
+    return f"[red]{pct:.0f}%[/red]"
+
+
 def report(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> None:
     if not rows:
         console.print("[dim]No data.[/dim]")
@@ -88,37 +103,29 @@ def report(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> None:
     t.add_row("Wall time", f"{wall:.0f}s ({wall/60:.1f}m)")
     if api > 0:
         t.add_row("API time", f"{api:.0f}s ({api/60:.1f}m)")
+
+    # Cache hit rate
+    total_cache = sum(_int(r, "cache_read") for r in latest)
+    cache_pct = _cache_hit_pct(total_cache, tok_in)
+    t.add_row("Cache hit", _color_cache(cache_pct))
+
     if adds or dels:
         t.add_row("Lines +/-", f"[green]+{adds}[/green] [red]-{dels}[/red]")
+
+    # Cost per line
+    total_lines = adds + dels
+    if total_lines > 0 and total_cost > 0:
+        t.add_row("Cost/line", f"${total_cost / total_lines:.4f}")
+
+    # Sparkline trends
+    trends = trend_block(all_rows)
+    for label, spark in trends.items():
+        if spark.strip():
+            t.add_row(f"{label} 7d", spark)
+
     console.print(t)
-    _cost_windows(all_rows)
-
-
-def _cost_windows(all_rows: list[dict[str, str]]) -> None:
-    now = datetime.now()
-    t = Table(title="Cost Windows", box=None, padding=(0, 2))
-    t.add_column("Window", style="bold")
-    t.add_column("Cost / Tokens", justify="right")
-    t.add_column("Sessions", justify="right", style="dim")
-
-    for label, delta in [("5h", timedelta(hours=5)), ("7d", timedelta(days=7)), ("30d", timedelta(days=30))]:
-        cutoff = now - delta
-        wr = [r for r in all_rows if datetime.fromisoformat(r["timestamp"]) >= cutoff]
-        wl = latest_per_session(wr)
-        by_p: dict[str, float] = {}
-        by_p_tok: dict[str, int] = {}
-        for r in wl:
-            p = r["provider"]
-            c = _float(r, "cost_usd") + _float(r, "sc_cost_usd")
-            by_p[p] = by_p.get(p, 0) + c
-            tok = _int(r, "tokens_in") + _int(r, "tokens_out") + _int(r, "sc_tokens_in") + _int(r, "sc_tokens_out")
-            by_p_tok[p] = by_p_tok.get(p, 0) + tok
-        total_c = sum(by_p.values())
-        total_t = sum(by_p_tok.values())
-        parts = " + ".join(f"{p}=${v:.2f}" for p, v in sorted(by_p.items()) if v > 0)
-        val = f"[green]${total_c:.3f}[/green] ({parts})" if total_c > 0 else f"{total_t:,} tokens"
-        t.add_row(label, val, str(len(wl)))
-    console.print(t)
+    cost_windows(all_rows)
+    week_over_week(all_rows)
 
 
 def session_table(rows: list[dict[str, str]]) -> None:
@@ -140,6 +147,7 @@ def session_table(rows: list[dict[str, str]]) -> None:
         t.add_column("SC Out", justify="right", style="yellow")
         t.add_column("SC Models", style="dim")
     t.add_column("Cost", justify="right")
+    t.add_column("Cache%", justify="right")
     t.add_column("Ctx%", justify="right")
     t.add_column("Wall", justify="right")
 
@@ -149,9 +157,12 @@ def session_table(rows: list[dict[str, str]]) -> None:
         cost_s = f"[green]${c:.3f}[/green]" if c > 0 else "[dim]—[/dim]"
         ctx = _float(r, "ctx_pct")
         ctx_s = f"[red]{ctx:.0f}%[/red]" if ctx > 80 else f"{ctx:.0f}%"
+        cr = _int(r, "cache_read")
+        ti = _int(r, "tokens_in")
+        cpct = _cache_hit_pct(cr, ti)
         row = [
             ts, r["session_id"][:12], r["provider"], r["model"][:22],
-            f"{_int(r, 'tokens_in'):,}", f"{_int(r, 'tokens_out'):,}",
+            f"{ti:,}", f"{_int(r, 'tokens_out'):,}",
         ]
         if has_sc:
             si, so = _int(r, "sc_tokens_in"), _int(r, "sc_tokens_out")
@@ -160,6 +171,6 @@ def session_table(rows: list[dict[str, str]]) -> None:
                 f"{so:,}" if so else "[dim]—[/dim]",
                 r.get("sc_models", "") or "[dim]—[/dim]",
             ])
-        row.extend([cost_s, ctx_s, f"{_float(r, 'wall_sec'):.0f}s"])
+        row.extend([cost_s, _color_cache(cpct), ctx_s, f"{_float(r, 'wall_sec'):.0f}s"])
         t.add_row(*row)
     console.print(t)
