@@ -209,6 +209,6 @@ __marimo__/
 # macOS
 .DS_Store
 
-# codetrack
-.codetrack/
+# metermaid
+.metermaid/
 *.csv

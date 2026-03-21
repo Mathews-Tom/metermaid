@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from codetrack.parsers.claude import parse_claude_transcript
+from metermaid.parsers.claude import parse_claude_transcript
 
 
 def _write_jsonl(path: Path, entries: list[dict]) -> Path:

@@ -19,7 +19,7 @@ from rich.table import Table
 
 from .csv_io import append_snapshot
 from .delta import compute_deltas
-from .models import CODETRACK_HOME, PID_FILE, SESSIONS_DIR, Snapshot
+from .models import METERMAID_HOME, PID_FILE, SESSIONS_DIR, Snapshot
 from .pricing import stamp_cost
 from .parsers import parse_claude_transcript, parse_codex_session
 from .platform import claude_project_dirs, codex_session_dirs, discover_sessions, is_wsl
@@ -50,7 +50,7 @@ def _live_table(snapshots: dict[str, Snapshot], last_change: dict[str, datetime]
 
     n_active = sum(1 for _, _, m in ranked if m < _STALE_MINUTES)
     total = len(ranked)
-    t = Table(title=f"codetrack watcher — {n_active} active, {total} tracked (poll #{polls})")
+    t = Table(title=f"metermaid watcher — {n_active} active, {total} tracked (poll #{polls})")
     t.add_column("Updated"); t.add_column("Session", style="cyan")
     t.add_column("Provider"); t.add_column("Model")
     t.add_column("Tok In", justify="right"); t.add_column("Tok Out", justify="right")
@@ -98,7 +98,7 @@ class SessionWatcher:
         self._write_pid()
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         c_dirs, x_dirs = claude_project_dirs(), codex_session_dirs()
-        console.print(f"[bold]codetrack[/bold] watching (interval={self.interval}s)")
+        console.print(f"[bold]metermaid[/bold] watching (interval={self.interval}s)")
         console.print(f"  Claude: {c_dirs or ['(none)']}")
         console.print(f"  Codex:  {x_dirs or ['(none)']}")
         if is_wsl():
@@ -166,8 +166,8 @@ class SessionWatcher:
         return snap
 
     def _daemonize(self) -> None:
-        log_path = CODETRACK_HOME / "codetrack.log"
-        CODETRACK_HOME.mkdir(parents=True, exist_ok=True)
+        log_path = METERMAID_HOME / "metermaid.log"
+        METERMAID_HOME.mkdir(parents=True, exist_ok=True)
         if _IS_WINDOWS:
             self._daemon_win(log_path)
         else:
@@ -184,7 +184,7 @@ class SessionWatcher:
         self._run_loop(); sys.exit(0)
 
     def _daemon_win(self, log_path: Path) -> None:
-        cmd = [sys.executable, "-m", "codetrack", "watch",
+        cmd = [sys.executable, "-m", "metermaid", "watch",
                "--data-dir", str(self.sessions_dir), "--interval", str(self.interval)]
         flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
         with open(log_path, "a") as lf:
@@ -197,5 +197,5 @@ class SessionWatcher:
         self._stop.set()
 
     def _write_pid(self) -> None:
-        CODETRACK_HOME.mkdir(parents=True, exist_ok=True)
+        METERMAID_HOME.mkdir(parents=True, exist_ok=True)
         PID_FILE.write_text(str(os.getpid()))

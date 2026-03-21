@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from codetrack.models import Snapshot
-from codetrack.pricing import estimate_cost, fill_cost, stamp_cost
+from metermaid.models import Snapshot
+from metermaid.pricing import estimate_cost, fill_cost, stamp_cost
 
 
 def _snap(provider: str = "codex", model: str = "gpt-5.4",

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from codetrack.platform import discover_sessions
+from metermaid.platform import discover_sessions
 
 
 def _create_claude_session(base: Path, project: str, session: str) -> Path:
@@ -25,7 +25,7 @@ def test_new_config_dir_discovery(tmp_path: Path) -> None:
     _create_claude_session(config_projects, "projhash1", "sess-aaa")
     _create_claude_session(config_projects, "projhash2", "sess-bbb")
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         claude, codex = discover_sessions(max_age_hours=24)
 
     assert len(claude) == 2
@@ -41,7 +41,7 @@ def test_legacy_dir_discovery(tmp_path: Path) -> None:
     legacy_projects = home / ".claude" / "projects"
     _create_claude_session(legacy_projects, "projhash1", "sess-legacy")
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         claude, codex = discover_sessions(max_age_hours=24)
 
     assert len(claude) == 1
@@ -54,7 +54,7 @@ def test_both_dirs_deduplicated(tmp_path: Path) -> None:
     _create_claude_session(home / ".config" / "claude" / "projects", "p1", "sess-new")
     _create_claude_session(home / ".claude" / "projects", "p2", "sess-old")
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         claude, _ = discover_sessions(max_age_hours=24)
 
     assert len(claude) == 2
@@ -70,7 +70,7 @@ def test_old_sessions_excluded(tmp_path: Path) -> None:
     import os
     os.utime(f, (old_time, old_time))
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         claude, _ = discover_sessions(max_age_hours=24)
 
     assert len(claude) == 0
@@ -83,7 +83,7 @@ def test_codex_session_discovery(tmp_path: Path) -> None:
     codex_dir.mkdir(parents=True)
     (codex_dir / "session1.jsonl").write_text("{}\n")
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         _, codex = discover_sessions(max_age_hours=24)
 
     assert len(codex) == 1

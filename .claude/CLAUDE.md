@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-## Project: codetrack
+## Project: metermaid
 
 Background usage tracker for Claude Code and Codex CLI sessions.
 
@@ -17,7 +17,7 @@ Background usage tracker for Claude Code and Codex CLI sessions.
 - `parsers/` is the only place that touches JSONL structure.
 - `cli.py` is thin — dispatches to other modules, no business logic.
 - Cost: capture `costUSD` when present, leave analysis to ccusage. Don't estimate cost from tokens.
-- **Per-session CSV files**: One file per session at `~/.codetrack/sessions/{provider}_{session_id}.csv`. No shared read-modify-write. Safe across multiple terminals/tabs/watchers. Reports scan all session files and merge on read.
+- **Per-session CSV files**: One file per session at `~/.metermaid/sessions/{provider}_{session_id}.csv`. No shared read-modify-write. Safe across multiple terminals/tabs/watchers. Reports scan all session files and merge on read.
 
 ## Testing
 
@@ -35,5 +35,5 @@ uv run pytest tests/
 uv tool install -e .
 
 # Type check
-uv run mypy src/codetrack/
+uv run mypy src/metermaid/
 ```

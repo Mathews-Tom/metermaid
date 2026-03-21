@@ -8,8 +8,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from codetrack.backfill import backfill
-from codetrack.csv_io import read_all_snapshots
+from metermaid.backfill import backfill
+from metermaid.csv_io import read_all_snapshots
 
 
 def _make_claude_session(base: Path, project: str, session: str,
@@ -38,7 +38,7 @@ def test_backfill_imports_sessions(tmp_path: Path) -> None:
     _make_claude_session(claude_projects, "proj2", "sess-bbb")
     sessions_dir = tmp_path / "sessions"
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         r = backfill(sessions_dir=sessions_dir, since_hours=0)
 
     assert r.found == 2
@@ -56,7 +56,7 @@ def test_backfill_skips_existing(tmp_path: Path) -> None:
     _make_claude_session(claude_projects, "proj1", "sess-aaa")
     sessions_dir = tmp_path / "sessions"
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         backfill(sessions_dir=sessions_dir, since_hours=0)
         r = backfill(sessions_dir=sessions_dir, since_hours=0)
 
@@ -71,7 +71,7 @@ def test_backfill_uses_file_mtime(tmp_path: Path) -> None:
     _make_claude_session(claude_projects, "proj1", "sess-old", age_hours=48)
     sessions_dir = tmp_path / "sessions"
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         backfill(sessions_dir=sessions_dir, since_hours=0)
 
     rows = read_all_snapshots(sessions_dir)
@@ -87,7 +87,7 @@ def test_backfill_dry_run(tmp_path: Path) -> None:
     _make_claude_session(claude_projects, "proj1", "sess-aaa")
     sessions_dir = tmp_path / "sessions"
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         r = backfill(sessions_dir=sessions_dir, since_hours=0, dry_run=True)
 
     assert r.found == 1
@@ -102,7 +102,7 @@ def test_backfill_since_filter(tmp_path: Path) -> None:
     _make_claude_session(claude_projects, "proj2", "sess-old", age_hours=72)
     sessions_dir = tmp_path / "sessions"
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         r = backfill(sessions_dir=sessions_dir, since_hours=24)
 
     assert r.found == 1
@@ -120,7 +120,7 @@ def test_backfill_no_data_counted(tmp_path: Path) -> None:
     )
     sessions_dir = tmp_path / "sessions"
 
-    with patch("codetrack.platform.home_roots", return_value=[home]):
+    with patch("metermaid.platform.home_roots", return_value=[home]):
         r = backfill(sessions_dir=sessions_dir, since_hours=0)
 
     assert r.found == 1

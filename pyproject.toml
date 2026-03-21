@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codetrack-cli"
+name = "metermaid-cli"
 dynamic = ["version"]
 description = "Background usage tracker for Claude Code and Codex CLI sessions"
 readme = "README.md"
@@ -32,18 +32,18 @@ classifiers = [
 ]
 
 [project.scripts]
-codetrack = "codetrack.cli:main"
+metermaid = "metermaid.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Mathews-Tom/codetrack"
-Repository = "https://github.com/Mathews-Tom/codetrack"
-Issues = "https://github.com/Mathews-Tom/codetrack/issues"
+Homepage = "https://github.com/Mathews-Tom/metermaid"
+Repository = "https://github.com/Mathews-Tom/metermaid"
+Issues = "https://github.com/Mathews-Tom/metermaid/issues"
 
 [tool.hatch.version]
-path = "src/codetrack/__init__.py"
+path = "src/metermaid/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/codetrack"]
+packages = ["src/metermaid"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

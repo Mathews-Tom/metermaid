@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import os
 import signal
 import sys
@@ -13,10 +12,11 @@ from pathlib import Path
 from rich.console import Console
 
 from .backfill import backfill
-from .consolidate import aggregate, provider_comparison, write_aggregate_csv
+from .compare import provider_comparison
+from .consolidate import aggregate, write_aggregate_csv
 from .csv_io import read_all_snapshots
 from .hook import handle_claude_hook
-from .models import CSV_HEADERS, CODETRACK_HOME, DEFAULT_INTERVAL, PID_FILE, SESSIONS_DIR
+from .models import METERMAID_HOME, DEFAULT_INTERVAL, PID_FILE, SESSIONS_DIR
 from .platform import discover_sessions, is_wsl, pid_alive
 from .report import filter_rows, report, session_table
 from .watcher import SessionWatcher
@@ -83,22 +83,21 @@ def _cmd_report(args: argparse.Namespace) -> None:
     )
     parts = [x for x in [args.window, args.provider,
              f"session {args.session}" if args.session else None] if x]
-    console.rule(f"codetrack ({' | '.join(parts) or 'all time'})")
+    console.rule(f"metermaid ({' | '.join(parts) or 'all time'})")
     report(filtered, all_rows)
     session_table(filtered)
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
+    from .export import export_dispatch
     rows = read_all_snapshots(args.data_dir)
     filtered = filter_rows(
         rows, window=args.window, session=args.session, provider=args.provider
     )
+    fmt = getattr(args, "format", "csv") or "csv"
     out = Path(args.out)
-    with open(out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_HEADERS)
-        w.writeheader()
-        w.writerows(filtered)
-    console.print(f"Exported [bold]{len(filtered)}[/bold] rows -> {out}")
+    export_dispatch(filtered, out, fmt)
+    console.print(f"Exported [bold]{len(filtered)}[/bold] rows ({fmt}) -> {out}")
 
 
 def _cmd_backfill(args: argparse.Namespace) -> None:
@@ -125,16 +124,49 @@ def _cmd_consolidate(args: argparse.Namespace) -> None:
     if args.summary:
         provider_comparison(agg)
         return
-    out_dir = CODETRACK_HOME / "data" / f"{args.window}ly"
+    out_dir = METERMAID_HOME / "data" / f"{args.window}ly"
     latest = max(r["window"] for r in agg)
     out_path = out_dir / f"{latest}.csv"
     write_aggregate_csv(agg, out_path)
     console.print(f"Wrote [bold]{len(agg)}[/bold] rows -> {out_path}")
 
 
+def _cmd_migrate(args: argparse.Namespace) -> None:
+    import shutil
+    old = Path.home() / ".codetrack"
+    new = METERMAID_HOME
+    if not old.exists():
+        console.print("[dim]No ~/.codetrack found — nothing to migrate.[/dim]")
+        return
+    if new.exists() and any(new.iterdir()):
+        console.print("[yellow]~/.metermaid already exists. Skipping.[/yellow]")
+        return
+    new.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for sub in ("sessions", "state"):
+        src = old / sub
+        if src.exists():
+            shutil.copytree(src, new / sub, dirs_exist_ok=True)
+            copied += len(list(src.iterdir()))
+    console.print(f"[green]Migrated[/green] {copied} files from ~/.codetrack -> ~/.metermaid")
+
+
+def _cmd_mcp(args: argparse.Namespace) -> None:
+    from .mcp import serve
+    serve(args.data_dir)
+
+
+def _cmd_heatmap(args: argparse.Namespace) -> None:
+    from .csv_io import read_all_snapshots as _read
+    from .heatmap import daily_activity, render_heatmap
+    rows = _read(args.data_dir)
+    activity = daily_activity(rows, days=args.days, metric=args.metric)
+    render_heatmap(activity, metric=args.metric, days=args.days)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
-        prog="codetrack",
+        prog="metermaid",
         description="Session metrics watcher for Claude Code & Codex CLI",
     )
     p.add_argument("--data-dir", type=Path, default=SESSIONS_DIR)
@@ -147,6 +179,7 @@ def main() -> None:
 
     sub.add_parser("stop").set_defaults(func=_cmd_stop)
     sub.add_parser("status").set_defaults(func=_cmd_status)
+    sub.add_parser("migrate").set_defaults(func=_cmd_migrate)
 
     h = sub.add_parser("hook")
     h.add_argument("provider", choices=["claude"])
@@ -168,8 +201,18 @@ def main() -> None:
         s = sub.add_parser(name)
         s.add_argument("--window"); s.add_argument("--session")
         s.add_argument("--provider", choices=["claude", "codex"])
-        if name == "export": s.add_argument("--out", default="codetrack_export.csv")
+        if name == "export":
+            s.add_argument("--format",
+                           choices=["csv", "json", "markdown", "html", "otlp"], default="csv")
+            s.add_argument("--out", default="metermaid_export.csv")
         s.set_defaults(func=func)
+
+    sub.add_parser("mcp").set_defaults(func=_cmd_mcp)
+
+    hm = sub.add_parser("heatmap")
+    hm.add_argument("--metric", choices=["cost", "tokens", "sessions"], default="cost")
+    hm.add_argument("--days", type=int, default=365)
+    hm.set_defaults(func=_cmd_heatmap)
 
     args = p.parse_args()
     args.func(args)

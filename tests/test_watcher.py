@@ -6,10 +6,10 @@ import json
 import time
 from pathlib import Path
 
-from codetrack.csv_io import read_all_snapshots
-from codetrack.models import Snapshot
-from codetrack.parsers.claude import parse_claude_transcript
-from codetrack.watcher import SessionWatcher, snap_hash
+from metermaid.csv_io import read_all_snapshots
+from metermaid.models import Snapshot
+from metermaid.parsers.claude import parse_claude_transcript
+from metermaid.watcher import SessionWatcher, snap_hash
 
 
 def _make_claude_jsonl(path: Path, tokens_in: int = 100, tokens_out: int = 50) -> Path:
@@ -87,7 +87,7 @@ def test_snap_hash_deterministic() -> None:
 
 def test_per_session_file_isolation(tmp_path: Path) -> None:
     """Each session writes to its own CSV — no shared file."""
-    from codetrack.csv_io import append_snapshot, session_csv_path
+    from metermaid.csv_io import append_snapshot, session_csv_path
 
     sessions_dir = tmp_path / "sessions"
     snap_a = Snapshot(
@@ -125,7 +125,7 @@ def test_per_session_file_isolation(tmp_path: Path) -> None:
 
 def test_multiple_rows_per_session(tmp_path: Path) -> None:
     """Multiple snapshots for the same session accumulate in one file."""
-    from codetrack.csv_io import append_snapshot
+    from metermaid.csv_io import append_snapshot
 
     sessions_dir = tmp_path / "sessions"
     for i in range(3):

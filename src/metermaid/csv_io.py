@@ -1,6 +1,6 @@
 """CSV I/O — one file per session, no shared read-modify-write.
 
-Layout: ~/.codetrack/sessions/{provider}_{session_id}.csv
+Layout: ~/.metermaid/sessions/{provider}_{session_id}.csv
 Each session file is append-only, written by exactly one process.
 Reports scan all session files → merge rows → filter/aggregate.
 """
