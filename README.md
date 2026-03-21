@@ -69,6 +69,7 @@ metermaid report --session abc123
 ```
 
 Report includes:
+
 - Token and cost totals with 7-day Unicode sparkline trends (`▁▂▃▄▅▆▇█`)
 - Cache hit rate color-coded by threshold (green >70%, yellow 40–70%, red <40%)
 - Cost per line changed (`total_cost / lines_changed`)
@@ -89,13 +90,13 @@ metermaid export --format html --out report.html
 metermaid export --format otlp --out metrics.json
 ```
 
-| Format | Description |
-|--------|-------------|
-| `csv` | Raw snapshot rows (default) |
-| `json` | Typed fields (numerics, not all strings) |
+| Format     | Description                                            |
+| ---------- | ------------------------------------------------------ |
+| `csv`      | Raw snapshot rows (default)                            |
+| `json`     | Typed fields (numerics, not all strings)               |
 | `markdown` | Summary stats + session table for PR comments or Slack |
-| `html` | Standalone report with inline CSS |
-| `otlp` | OpenTelemetry-compatible JSON for Prometheus/Grafana |
+| `html`     | Standalone report with inline CSS                      |
+| `otlp`     | OpenTelemetry-compatible JSON for Prometheus/Grafana   |
 
 ### Heatmap
 
@@ -128,6 +129,7 @@ metermaid mcp
 ```
 
 Available tools:
+
 - `get_usage_summary` — aggregate stats (sessions, tokens, cost, cache hit rate)
 - `get_session_list` — per-session details with optional time window filter
 - `get_cost_windows` — cost totals for 5h, 7d, and 30d windows
@@ -171,16 +173,16 @@ Auto-discovers sessions with no configuration:
 
 Each snapshot records:
 
-| Field                              | Source                                    |
-| ---------------------------------- | ----------------------------------------- |
-| `tokens_in`, `tokens_out`          | Cumulative input/output tokens            |
-| `cache_read`, `cache_write`        | Prompt cache usage                        |
-| `cost_usd`                         | `costUSD` from transcript (Claude Code)   |
-| `ctx_pct`, `ctx_tokens`, `ctx_max` | Context window utilization                |
-| `wall_sec`                         | Wall clock time (first to last timestamp) |
-| `api_sec`                          | API latency (statusLine hook only)        |
-| `diff_add`, `diff_del`             | Lines added/removed (statusLine hook only)|
-| `model`, `provider`, `session_id`  | Session identification                    |
+| Field                              | Source                                     |
+| ---------------------------------- | ------------------------------------------ |
+| `tokens_in`, `tokens_out`          | Cumulative input/output tokens             |
+| `cache_read`, `cache_write`        | Prompt cache usage                         |
+| `cost_usd`                         | `costUSD` from transcript (Claude Code)    |
+| `ctx_pct`, `ctx_tokens`, `ctx_max` | Context window utilization                 |
+| `wall_sec`                         | Wall clock time (first to last timestamp)  |
+| `api_sec`                          | API latency (statusLine hook only)         |
+| `diff_add`, `diff_del`             | Lines added/removed (statusLine hook only) |
+| `model`, `provider`, `session_id`  | Session identification                     |
 
 ## Storage
 

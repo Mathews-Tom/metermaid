@@ -213,5 +213,11 @@ __marimo__/
 .metermaid/
 *.csv
 
-# Claude Code project config
+# Agentic Systems
+.agent
 .claude/
+.gemini
+.opencode/
+
+# Developer workspace
+.docs/
