@@ -127,6 +127,17 @@ def report(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> None:
     cost_windows(all_rows)
     week_over_week(all_rows)
 
+    # Budget gauge (if configured)
+    from .budget import budget_report, load_config
+    cfg = load_config()
+    if cfg and cfg.monthly_usd > 0:
+        budget_report(cfg, all_rows)
+
+    # Actionable nudges
+    from .nudges import analyze, render_nudges
+    nudges = analyze(rows, all_rows)
+    render_nudges(nudges)
+
 
 def session_table(rows: list[dict[str, str]]) -> None:
     latest = latest_per_session(rows)
