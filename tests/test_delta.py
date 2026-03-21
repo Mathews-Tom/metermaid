@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codetrack.delta import compute_deltas, load_state, save_state
-from codetrack.models import Snapshot
+from metermaid.delta import compute_deltas, load_state, save_state
+from metermaid.models import Snapshot
 
 
 def _snap(tokens_in: int = 1000, tokens_out: int = 500) -> Snapshot:

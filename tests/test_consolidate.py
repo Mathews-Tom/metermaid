@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from codetrack.consolidate import aggregate, window_key
+from metermaid.consolidate import aggregate, window_key
 
 
 def _row(

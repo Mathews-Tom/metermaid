@@ -1,4 +1,4 @@
-"""Snapshot dataclass — the single shared data model for codetrack."""
+"""Snapshot dataclass — the single shared data model for metermaid."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from dataclasses import dataclass, fields
 from datetime import datetime
 from pathlib import Path
 
-CODETRACK_HOME: Path = Path.home() / ".codetrack"
-SESSIONS_DIR: Path = CODETRACK_HOME / "sessions"
-STATE_DIR: Path = CODETRACK_HOME / "state"
-PID_FILE: Path = CODETRACK_HOME / "codetrack.pid"
+METERMAID_HOME: Path = Path.home() / ".metermaid"
+SESSIONS_DIR: Path = METERMAID_HOME / "sessions"
+STATE_DIR: Path = METERMAID_HOME / "state"
+PID_FILE: Path = METERMAID_HOME / "metermaid.pid"
 DEFAULT_INTERVAL: int = 10
 
 

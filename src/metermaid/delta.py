@@ -1,6 +1,6 @@
 """Delta tracking via state sidecar files.
 
-Stores (tok_in, tok_out) per session in ~/.codetrack/state/{provider}_{session_id}.state.
+Stores (tok_in, tok_out) per session in ~/.metermaid/state/{provider}_{session_id}.state.
 Each snapshot gets tok_in_delta and tok_out_delta computed from the previous state.
 """
 

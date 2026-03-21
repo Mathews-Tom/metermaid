@@ -1,4 +1,4 @@
-"""Backfill — one-shot import of historical sessions into codetrack."""
+"""Backfill — one-shot import of historical sessions into metermaid."""
 
 from __future__ import annotations
 

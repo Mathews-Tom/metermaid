@@ -16,7 +16,7 @@ from .backfill import backfill
 from .consolidate import aggregate, provider_comparison, write_aggregate_csv
 from .csv_io import read_all_snapshots
 from .hook import handle_claude_hook
-from .models import CSV_HEADERS, CODETRACK_HOME, DEFAULT_INTERVAL, PID_FILE, SESSIONS_DIR
+from .models import CSV_HEADERS, METERMAID_HOME, DEFAULT_INTERVAL, PID_FILE, SESSIONS_DIR
 from .platform import discover_sessions, is_wsl, pid_alive
 from .report import filter_rows, report, session_table
 from .watcher import SessionWatcher
@@ -83,7 +83,7 @@ def _cmd_report(args: argparse.Namespace) -> None:
     )
     parts = [x for x in [args.window, args.provider,
              f"session {args.session}" if args.session else None] if x]
-    console.rule(f"codetrack ({' | '.join(parts) or 'all time'})")
+    console.rule(f"metermaid ({' | '.join(parts) or 'all time'})")
     report(filtered, all_rows)
     session_table(filtered)
 
@@ -125,16 +125,36 @@ def _cmd_consolidate(args: argparse.Namespace) -> None:
     if args.summary:
         provider_comparison(agg)
         return
-    out_dir = CODETRACK_HOME / "data" / f"{args.window}ly"
+    out_dir = METERMAID_HOME / "data" / f"{args.window}ly"
     latest = max(r["window"] for r in agg)
     out_path = out_dir / f"{latest}.csv"
     write_aggregate_csv(agg, out_path)
     console.print(f"Wrote [bold]{len(agg)}[/bold] rows -> {out_path}")
 
 
+def _cmd_migrate(args: argparse.Namespace) -> None:
+    import shutil
+    old = Path.home() / ".codetrack"
+    new = METERMAID_HOME
+    if not old.exists():
+        console.print("[dim]No ~/.codetrack found — nothing to migrate.[/dim]")
+        return
+    if new.exists() and any(new.iterdir()):
+        console.print("[yellow]~/.metermaid already exists. Skipping.[/yellow]")
+        return
+    new.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for sub in ("sessions", "state"):
+        src = old / sub
+        if src.exists():
+            shutil.copytree(src, new / sub, dirs_exist_ok=True)
+            copied += len(list(src.iterdir()))
+    console.print(f"[green]Migrated[/green] {copied} files from ~/.codetrack -> ~/.metermaid")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
-        prog="codetrack",
+        prog="metermaid",
         description="Session metrics watcher for Claude Code & Codex CLI",
     )
     p.add_argument("--data-dir", type=Path, default=SESSIONS_DIR)
@@ -147,6 +167,7 @@ def main() -> None:
 
     sub.add_parser("stop").set_defaults(func=_cmd_stop)
     sub.add_parser("status").set_defaults(func=_cmd_status)
+    sub.add_parser("migrate").set_defaults(func=_cmd_migrate)
 
     h = sub.add_parser("hook")
     h.add_argument("provider", choices=["claude"])
@@ -168,7 +189,7 @@ def main() -> None:
         s = sub.add_parser(name)
         s.add_argument("--window"); s.add_argument("--session")
         s.add_argument("--provider", choices=["claude", "codex"])
-        if name == "export": s.add_argument("--out", default="codetrack_export.csv")
+        if name == "export": s.add_argument("--out", default="metermaid_export.csv")
         s.set_defaults(func=func)
 
     args = p.parse_args()

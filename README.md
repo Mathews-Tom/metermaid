@@ -1,4 +1,4 @@
-# codetrack
+# metermaid
 
 Background usage tracker for Claude Code and Codex CLI sessions.
 
@@ -7,7 +7,7 @@ Polls active session directories, extracts token usage, context window state, co
 ## Install
 
 ```bash
-uv tool install codetrack-cli
+uv tool install metermaid-cli
 ```
 
 Or from source:
@@ -22,14 +22,14 @@ Requires Python 3.11+. No dependencies beyond stdlib.
 
 ```bash
 # Import all existing sessions from disk
-codetrack backfill
+metermaid backfill
 
 # Start watching for new activity (background)
-codetrack watch --daemon
+metermaid watch --daemon
 
 # See what's happening
-codetrack status
-codetrack report
+metermaid status
+metermaid report
 ```
 
 ## Usage
@@ -39,11 +39,11 @@ codetrack report
 Polls Claude Code and Codex CLI session directories for changes. Both providers are tracked automatically — no configuration needed.
 
 ```bash
-codetrack watch                  # foreground (Ctrl+C to stop)
-codetrack watch --daemon         # background (writes PID file)
-codetrack watch --interval 5     # custom poll interval (seconds)
-codetrack stop                   # stop background watcher
-codetrack status                 # watcher state + active sessions
+metermaid watch                  # foreground (Ctrl+C to stop)
+metermaid watch --daemon         # background (writes PID file)
+metermaid watch --interval 5     # custom poll interval (seconds)
+metermaid stop                   # stop background watcher
+metermaid status                 # watcher state + active sessions
 ```
 
 ### Backfill
@@ -51,26 +51,26 @@ codetrack status                 # watcher state + active sessions
 Import historical sessions already on disk. Idempotent — skips sessions that are already tracked. Uses each file's modification time as the snapshot timestamp, so historical data appears in the correct report windows.
 
 ```bash
-codetrack backfill               # all sessions
-codetrack backfill --since 168   # last 7 days (168 hours)
-codetrack backfill --dry-run     # preview without writing
+metermaid backfill               # all sessions
+metermaid backfill --since 168   # last 7 days (168 hours)
+metermaid backfill --dry-run     # preview without writing
 ```
 
 ### Report
 
 ```bash
-codetrack report                 # all time
-codetrack report --window 7d     # last 7 days
-codetrack report --window 5h     # last 5 hours
-codetrack report --provider claude
-codetrack report --session abc123
+metermaid report                 # all time
+metermaid report --window 7d     # last 7 days
+metermaid report --window 5h     # last 5 hours
+metermaid report --provider claude
+metermaid report --session abc123
 ```
 
 ### Export
 
 ```bash
-codetrack export --window 30d --out export.csv
-codetrack export --provider codex --out codex.csv
+metermaid export --window 30d --out export.csv
+metermaid export --provider codex --out codex.csv
 ```
 
 ## Session discovery
@@ -101,21 +101,21 @@ Each snapshot records:
 
 ## Storage
 
-Per-session CSV files at `~/.codetrack/sessions/{provider}_{session_id}.csv`. Each file is append-only, written by exactly one process. Reports scan all session files and merge on read.
+Per-session CSV files at `~/.metermaid/sessions/{provider}_{session_id}.csv`. Each file is append-only, written by exactly one process. Reports scan all session files and merge on read.
 
 ```
-~/.codetrack/
+~/.metermaid/
   sessions/
     claude_a1b2c3d4e5f6.csv
     claude_f7e8d9c0b1a2.csv
     codex_session1234.csv
-  codetrack.pid
-  codetrack.log
+  metermaid.pid
+  metermaid.log
 ```
 
 ## Cost tracking
 
-codetrack captures `costUSD` when present in Claude Code transcripts but does not estimate cost from tokens. For detailed cost breakdowns across providers, use [ccusage](https://ccusage.com).
+metermaid captures `costUSD` when present in Claude Code transcripts but does not estimate cost from tokens. For detailed cost breakdowns across providers, use [ccusage](https://ccusage.com).
 
 ## How it works
 
@@ -126,7 +126,7 @@ codetrack captures `costUSD` when present in Claude Code transcripts but does no
 
 ## Advanced: statusLine hook
 
-The watcher gets all data from JSONL transcripts. For additional fields (`api_sec`, `diff_add`, `diff_del`), you can manually configure Claude Code's statusLine to pipe through codetrack:
+The watcher gets all data from JSONL transcripts. For additional fields (`api_sec`, `diff_add`, `diff_del`), you can manually configure Claude Code's statusLine to pipe through metermaid:
 
 Add to `~/.claude/settings.json`:
 
@@ -134,7 +134,7 @@ Add to `~/.claude/settings.json`:
 {
   "statusLine": {
     "type": "command",
-    "command": "codetrack hook claude"
+    "command": "metermaid hook claude"
   }
 }
 ```

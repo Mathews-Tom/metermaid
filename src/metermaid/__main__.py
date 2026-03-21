@@ -1,4 +1,4 @@
-"""Allow running as python -m codetrack."""
+"""Allow running as python -m metermaid."""
 
 from __future__ import annotations
 

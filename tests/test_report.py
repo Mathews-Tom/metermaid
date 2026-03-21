@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from rich.console import Console
 
-from codetrack.report import filter_rows, latest_per_session, report
+from metermaid.report import filter_rows, latest_per_session, report
 
 
 def _make_row(
@@ -37,7 +37,7 @@ def _make_row(
 
 def _capture_report(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> str:
     """Capture rich console output from report() as plain text."""
-    import codetrack.report as mod
+    import metermaid.report as mod
     buf = io.StringIO()
     old_console = mod.console
     mod.console = Console(file=buf, force_terminal=False, width=120)

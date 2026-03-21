@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from codetrack.parsers.codex import parse_codex_session
+from metermaid.parsers.codex import parse_codex_session
 
 
 def _write_jsonl(path: Path, entries: list[dict]) -> Path:
