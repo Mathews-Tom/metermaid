@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import os
 import signal
 import sys
@@ -17,7 +16,7 @@ from .compare import provider_comparison
 from .consolidate import aggregate, write_aggregate_csv
 from .csv_io import read_all_snapshots
 from .hook import handle_claude_hook
-from .models import CSV_HEADERS, METERMAID_HOME, DEFAULT_INTERVAL, PID_FILE, SESSIONS_DIR
+from .models import METERMAID_HOME, DEFAULT_INTERVAL, PID_FILE, SESSIONS_DIR
 from .platform import discover_sessions, is_wsl, pid_alive
 from .report import filter_rows, report, session_table
 from .watcher import SessionWatcher
@@ -90,16 +89,15 @@ def _cmd_report(args: argparse.Namespace) -> None:
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
+    from .export import export_dispatch
     rows = read_all_snapshots(args.data_dir)
     filtered = filter_rows(
         rows, window=args.window, session=args.session, provider=args.provider
     )
+    fmt = getattr(args, "format", "csv") or "csv"
     out = Path(args.out)
-    with open(out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_HEADERS)
-        w.writeheader()
-        w.writerows(filtered)
-    console.print(f"Exported [bold]{len(filtered)}[/bold] rows -> {out}")
+    export_dispatch(filtered, out, fmt)
+    console.print(f"Exported [bold]{len(filtered)}[/bold] rows ({fmt}) -> {out}")
 
 
 def _cmd_backfill(args: argparse.Namespace) -> None:
@@ -190,7 +188,9 @@ def main() -> None:
         s = sub.add_parser(name)
         s.add_argument("--window"); s.add_argument("--session")
         s.add_argument("--provider", choices=["claude", "codex"])
-        if name == "export": s.add_argument("--out", default="metermaid_export.csv")
+        if name == "export":
+            s.add_argument("--format", choices=["csv", "json", "markdown", "html", "otlp"], default="csv")
+            s.add_argument("--out", default="metermaid_export.csv")
         s.set_defaults(func=func)
 
     args = p.parse_args()
