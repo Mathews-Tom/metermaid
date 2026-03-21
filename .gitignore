@@ -212,3 +212,6 @@ __marimo__/
 # metermaid
 .metermaid/
 *.csv
+
+# Claude Code project config
+.claude/
