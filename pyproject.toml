@@ -35,9 +35,9 @@ classifiers = [
 metermaid = "metermaid.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Mathews-Tom/codetrack"
-Repository = "https://github.com/Mathews-Tom/codetrack"
-Issues = "https://github.com/Mathews-Tom/codetrack/issues"
+Homepage = "https://github.com/Mathews-Tom/metermaid"
+Repository = "https://github.com/Mathews-Tom/metermaid"
+Issues = "https://github.com/Mathews-Tom/metermaid/issues"
 
 [tool.hatch.version]
 path = "src/metermaid/__init__.py"

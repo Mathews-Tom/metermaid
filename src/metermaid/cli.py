@@ -151,6 +151,19 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
     console.print(f"[green]Migrated[/green] {copied} files from ~/.codetrack -> ~/.metermaid")
 
 
+def _cmd_mcp(args: argparse.Namespace) -> None:
+    from .mcp import serve
+    serve(args.data_dir)
+
+
+def _cmd_heatmap(args: argparse.Namespace) -> None:
+    from .csv_io import read_all_snapshots as _read
+    from .heatmap import daily_activity, render_heatmap
+    rows = _read(args.data_dir)
+    activity = daily_activity(rows, days=args.days, metric=args.metric)
+    render_heatmap(activity, metric=args.metric, days=args.days)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         prog="metermaid",
@@ -189,9 +202,17 @@ def main() -> None:
         s.add_argument("--window"); s.add_argument("--session")
         s.add_argument("--provider", choices=["claude", "codex"])
         if name == "export":
-            s.add_argument("--format", choices=["csv", "json", "markdown", "html", "otlp"], default="csv")
+            s.add_argument("--format",
+                           choices=["csv", "json", "markdown", "html", "otlp"], default="csv")
             s.add_argument("--out", default="metermaid_export.csv")
         s.set_defaults(func=func)
+
+    sub.add_parser("mcp").set_defaults(func=_cmd_mcp)
+
+    hm = sub.add_parser("heatmap")
+    hm.add_argument("--metric", choices=["cost", "tokens", "sessions"], default="cost")
+    hm.add_argument("--days", type=int, default=365)
+    hm.set_defaults(func=_cmd_heatmap)
 
     args = p.parse_args()
     args.func(args)
