@@ -112,3 +112,46 @@ class FileWatermark:
             raise ValueError("Watermark counters must be non-negative")
         if self.complete_offset > self.observed_size:
             raise ValueError("complete_offset cannot exceed observed_size")
+
+
+@dataclass(frozen=True, slots=True)
+class LegacySnapshot:
+    """One idempotently imported v0.2 CSV row — never a normalized event.
+
+    Explicitly isolated from :class:`NormalizedEvent`: nothing here is
+    inferred, converted, or ever merged into ``events`` aggregates. Every
+    field is one of the eight columns DM-003 allow-lists directly from the
+    legacy ``Snapshot`` CSV row it was mapped from (timestamp, provider,
+    model, cumulative token/cache counters, and cost). The raw path,
+    session identifier, source provenance, deltas, sidechain metadata, and
+    context/timing columns are never read, so they cannot appear here.
+    """
+
+    legacy_id: str
+    source_fingerprint: str
+    row_fingerprint: str
+    imported_at: datetime
+    timestamp: str
+    provider: str
+    model: str
+    tokens_in: int
+    tokens_out: int
+    cache_read: int
+    cache_write: int
+    cost_usd: float
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("legacy_id", self.legacy_id),
+            ("source_fingerprint", self.source_fingerprint),
+            ("row_fingerprint", self.row_fingerprint),
+        ):
+            _require_opaque_identifier(name, value)
+        for name in ("timestamp", "provider", "model"):
+            if not getattr(self, name):
+                raise ValueError(f"{name} must be non-empty")
+        for name in ("tokens_in", "tokens_out", "cache_read", "cache_write"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be non-negative")
+        if self.cost_usd < 0:
+            raise ValueError("cost_usd must be non-negative")

@@ -21,6 +21,13 @@ from .doctor import DoctorReport, build_doctor_report
 from .export_v1 import build_export, export_preview, write_export
 from .hook import handle_claude_hook
 from .ingest import IngestSummary, ingest_once
+from .legacy_v1 import (
+    LegacyHistoryReport,
+    LegacyImportSummary,
+    LegacyProviderAggregate,
+    build_legacy_report,
+    import_legacy_snapshots,
+)
 from .models import DEFAULT_INTERVAL, METERMAID_HOME, PID_FILE, SESSIONS_DIR
 from .report import filter_rows
 from .report_v1 import GroupAggregate, ObservedReport, ReportFilter, build_report
@@ -254,6 +261,70 @@ def _print_observed_report(observed: ObservedReport) -> None:
     )
 
 
+def _legacy_provider_table(rows: tuple[LegacyProviderAggregate, ...]) -> Table:
+    t = Table(title="By provider", box=None)
+    t.add_column("Provider", style="cyan")
+    t.add_column("Rows", justify="right")
+    t.add_column("Tokens in", justify="right")
+    t.add_column("Tokens out", justify="right")
+    t.add_column("Cache read", justify="right")
+    t.add_column("Cache write", justify="right")
+    t.add_column("Cost (USD)", justify="right")
+    for row in rows:
+        t.add_row(
+            row.provider,
+            str(row.row_count),
+            str(row.totals.tokens_in),
+            str(row.totals.tokens_out),
+            str(row.totals.cache_read),
+            str(row.totals.cache_write),
+            f"{row.totals.cost_usd:.4f}",
+        )
+    if not rows:
+        t.add_row("[dim]none[/dim]", "", "", "", "", "", "")
+    return t
+
+
+def _print_legacy_history(legacy: LegacyHistoryReport) -> None:
+    """Render imported v0.2 history in its own, clearly marked section.
+
+    Never appears inside :func:`_print_observed_report`'s totals or
+    tables: legacy rows are never summed or grouped together with
+    current normalized events.
+    """
+    console.print(
+        f"[bold]Legacy history (imported v0.2 snapshots):[/bold] "
+        f"[bold]{legacy.row_count}[/bold] rows"
+    )
+    console.print(
+        f"Legacy totals: in={legacy.totals.tokens_in} "
+        f"out={legacy.totals.tokens_out} "
+        f"cache_read={legacy.totals.cache_read} "
+        f"cache_write={legacy.totals.cache_write} "
+        f"cost_usd={legacy.totals.cost_usd:.4f}"
+    )
+    console.print(_legacy_provider_table(legacy.by_provider))
+
+
+def _print_legacy_import_summary(summary: LegacyImportSummary) -> None:
+    console.print(
+        f"Legacy import: scanned=[bold]{summary.files_scanned}[/bold] files, "
+        f"imported=[bold]{summary.files_imported}[/bold], "
+        f"unsupported_header={summary.files_unsupported_header}, "
+        f"malformed={summary.files_malformed}"
+    )
+    console.print(
+        f"Legacy rows: inserted=[bold]{summary.rows_inserted}[/bold], "
+        f"duplicate={summary.rows_duplicate}"
+    )
+
+
+def _cmd_import_legacy(args: argparse.Namespace) -> None:
+    store, secret = _open_v1_store(args)
+    summary = import_legacy_snapshots(store, secret, args.legacy_dir)
+    _print_legacy_import_summary(summary)
+
+
 def _cmd_report(args: argparse.Namespace) -> None:
     store, _secret = _open_v1_store(args)
     filter_ = ReportFilter(
@@ -265,6 +336,7 @@ def _cmd_report(args: argparse.Namespace) -> None:
     )
     observed = build_report(store.events(), filter_)
     _print_observed_report(observed)
+    _print_legacy_history(build_legacy_report(store.legacy_snapshots()))
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
@@ -431,6 +503,11 @@ def main() -> None:
     expagg.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
     expagg.add_argument("--out", default="metermaid_aggregate_export.json")
     expagg.set_defaults(func=_cmd_export_aggregate)
+
+    imp = sub.add_parser("import-legacy")
+    imp.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    imp.add_argument("legacy_dir", type=Path, nargs="?", default=SESSIONS_DIR)
+    imp.set_defaults(func=_cmd_import_legacy)
 
     sub.add_parser("mcp").set_defaults(func=_cmd_mcp)
 
