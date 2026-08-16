@@ -1,4 +1,4 @@
-"""SQLite-backed persistence for Metermaid v1 normalized events."""
+"""SQLite-backed persistence for Metermaid v1 normalized events and isolated legacy history."""
 
 from __future__ import annotations
 
@@ -9,10 +9,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .domain import FileWatermark, NormalizedEvent, ParseOutcome
+from .domain import FileWatermark, LegacySnapshot, NormalizedEvent, ParseOutcome
 from .state import load_or_create_secret, resolve_state_paths
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+"""v1 adds ``events``/``file_watermarks``/``ingest_diagnostics`` plus an
+empty ``legacy_snapshots`` placeholder table; v2 gives that placeholder its
+mapped-value columns for the M4 legacy importer (see ``_apply_v2_schema``)."""
 
 
 def open_store(data_dir: Path | None = None) -> EventStore:
@@ -27,6 +30,13 @@ def open_store(data_dir: Path | None = None) -> EventStore:
 @dataclass(frozen=True, slots=True)
 class CommitResult:
     inserted_events: int
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyCommitResult:
+    """Isolated legacy-import commit result — never mixed with event counts."""
+
+    inserted_rows: int
 
 
 class EventStore:
@@ -45,11 +55,17 @@ class EventStore:
             version = connection.execute("PRAGMA user_version").fetchone()
             if version is None:
                 raise RuntimeError("Metermaid v1 store could not read schema version")
-            if version[0] > SCHEMA_VERSION:
+            current = version[0]
+            if current > SCHEMA_VERSION:
                 raise RuntimeError("Metermaid database uses a newer schema version")
-            if version[0] < 1:
+            if current < 1:
                 self._apply_v1_schema(connection)
-                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                current = 1
+                connection.execute(f"PRAGMA user_version = {current}")
+            if current < 2:
+                self._apply_v2_schema(connection)
+                current = 2
+                connection.execute(f"PRAGMA user_version = {current}")
 
     def commit_ingest(
         self,
@@ -154,6 +170,47 @@ class EventStore:
             ).fetchone()
         return FileWatermark(*row) if row is not None else None
 
+    def commit_legacy_import(
+        self, snapshots: Iterable[LegacySnapshot]
+    ) -> LegacyCommitResult:
+        """Atomically store idempotent legacy rows, isolated from event ingest.
+
+        Never touches ``events``, ``file_watermarks``, or
+        ``ingest_diagnostics``: legacy history has its own table, its own
+        idempotency key, and its own read path (:meth:`legacy_snapshots`).
+        """
+        rows = tuple(snapshots)
+        with self._connection() as connection:
+            with connection:
+                inserted_rows = sum(
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO legacy_snapshots (
+                            legacy_id, source_fingerprint, row_fingerprint,
+                            imported_at, timestamp, provider, model,
+                            tokens_in, tokens_out, cache_read, cache_write,
+                            cost_usd
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        _legacy_values(row),
+                    ).rowcount
+                    for row in rows
+                )
+        return LegacyCommitResult(inserted_rows=inserted_rows)
+
+    def legacy_snapshots(self) -> list[LegacySnapshot]:
+        """Return imported legacy rows, isolated from normalized events."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT legacy_id, source_fingerprint, row_fingerprint,
+                       imported_at, timestamp, provider, model, tokens_in,
+                       tokens_out, cache_read, cache_write, cost_usd
+                FROM legacy_snapshots ORDER BY imported_at, legacy_id
+                """
+            ).fetchall()
+        return [_legacy_snapshot_from_row(row) for row in rows]
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self._database_path)
@@ -210,6 +267,37 @@ class EventStore:
             """
         )
 
+    @staticmethod
+    def _apply_v2_schema(connection: sqlite3.Connection) -> None:
+        """Give ``legacy_snapshots`` its mapped-value columns.
+
+        No released version has ever written to ``legacy_snapshots`` — it
+        was declared by the M2 event-store migration purely as forward
+        schema surface for this importer. Recreating it here is therefore
+        safe: there is no live data to preserve, and SQLite cannot add a
+        ``NOT NULL`` column without a default via ``ALTER TABLE``.
+        """
+        connection.executescript(
+            """
+            DROP TABLE IF EXISTS legacy_snapshots;
+            CREATE TABLE legacy_snapshots (
+                legacy_id TEXT PRIMARY KEY,
+                source_fingerprint TEXT NOT NULL,
+                row_fingerprint TEXT NOT NULL,
+                imported_at TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                tokens_in INTEGER NOT NULL,
+                tokens_out INTEGER NOT NULL,
+                cache_read INTEGER NOT NULL,
+                cache_write INTEGER NOT NULL,
+                cost_usd REAL NOT NULL,
+                UNIQUE(source_fingerprint, row_fingerprint)
+            );
+            """
+        )
+
 
 def _event_values(event: NormalizedEvent) -> tuple[object, ...]:
     return (
@@ -252,4 +340,38 @@ def _event_from_row(row: sqlite3.Row) -> NormalizedEvent:
         provider_cost_usd=row["provider_cost_usd"],
         safe_tool_category=row["safe_tool_category"],
         provenance=row["provenance"],
+    )
+
+
+def _legacy_values(row: LegacySnapshot) -> tuple[object, ...]:
+    return (
+        row.legacy_id,
+        row.source_fingerprint,
+        row.row_fingerprint,
+        row.imported_at.isoformat(),
+        row.timestamp,
+        row.provider,
+        row.model,
+        row.tokens_in,
+        row.tokens_out,
+        row.cache_read,
+        row.cache_write,
+        row.cost_usd,
+    )
+
+
+def _legacy_snapshot_from_row(row: sqlite3.Row) -> LegacySnapshot:
+    return LegacySnapshot(
+        legacy_id=row["legacy_id"],
+        source_fingerprint=row["source_fingerprint"],
+        row_fingerprint=row["row_fingerprint"],
+        imported_at=datetime.fromisoformat(row["imported_at"]),
+        timestamp=row["timestamp"],
+        provider=row["provider"],
+        model=row["model"],
+        tokens_in=row["tokens_in"],
+        tokens_out=row["tokens_out"],
+        cache_read=row["cache_read"],
+        cache_write=row["cache_write"],
+        cost_usd=row["cost_usd"],
     )
