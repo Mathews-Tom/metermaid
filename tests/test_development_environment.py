@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 GATE = "uv run ruff check . && uv run ruff format --check . && uv run mypy src tests && uv run pytest"
+SYNC = "uv sync --all-groups --locked --python 3.11"
 
 
 def test_development_tools_and_python_311_target_are_declared() -> None:
@@ -25,5 +26,6 @@ def test_development_tools_and_python_311_target_are_declared() -> None:
 def test_ci_syncs_all_groups_before_running_the_repository_gate() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
 
-    assert "uv sync --all-groups" in workflow
+    assert SYNC in workflow
     assert GATE in workflow
+    assert workflow.index(SYNC) < workflow.index(GATE)
