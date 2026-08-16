@@ -183,6 +183,8 @@ def _optional_nested_int(
     if outer_key not in container:
         return None
     outer = container[outer_key]
+    if outer is None:
+        return None
     if not isinstance(outer, Mapping):
         raise _RecordShapeError()
     return _optional_int(outer, inner_key)

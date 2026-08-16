@@ -364,6 +364,14 @@ def test_omp_adapter_reports_an_unreviewed_discriminator_as_unsupported() -> Non
     )
 
 
+def test_claude_adapter_treats_null_thinking_details_as_unavailable() -> None:
+    record = _fixture("claude-assistant-null-thinking.jsonl")
+    outcome = ClaudeCodeAdapter().parse(record, context=_CONTEXT, secret=_SECRET)
+
+    assert isinstance(outcome, NormalizedEvent)
+    assert outcome.reasoning_tokens is None
+
+
 # --- Malformed: usage present but broken ------------------------------------
 
 
