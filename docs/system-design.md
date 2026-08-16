@@ -2,9 +2,9 @@
 
 **Repo:** `github.com/Mathews-Tom/metermaid`
 **Document date:** 2026-08-16
-**Companion:** `system-overview.md`
+**Companion:** [system overview](system-overview.md)
 
-> **Status: deferred design reference.** This document is not the approved v1 implementation scope or a statement of shipped behavior. Its rate-limit, stall, classifier, TUI, PATH-guard, OpenTelemetry, and local-model proposals require their stated evidence gates before promotion.
+> **Status: deferred design reference.** This document is not the approved v1 implementation scope or a statement of shipped behavior. Its rate-limit, stall, classifier, TUI, PATH-guard, OpenTelemetry ingest, and local-model proposals require their stated evidence gates before promotion.
 
 ---
 
@@ -90,6 +90,7 @@ flowchart TB
         GUARD["metermaid guard<br/>PATH shim"]
         RPT["report · advise"]
         EXP["export<br/>allowlist serializer"]
+        MCP["mcp<br/>stdio summary server"]
     end
 
     T1 --> WATCH
@@ -103,6 +104,7 @@ flowchart TB
     DB --> COMP
     DB --> CLS
     DB --> ATTR
+    DB --> MCP
     CLS -.abstained.-> LLM -.label + provenance.-> DB
 
     WIN --> DB
@@ -165,7 +167,7 @@ class UsageEvent(BaseModel):
     cache_creation_tokens: int
     cache_read_tokens: int
     thinking_tokens: int | None   # None = not reported; 0 = reported zero
-    cost_usd: Decimal | None      # captured only, never estimated
+    cost_usd: Decimal | None      # captured-only after the explicit v1 cutover
     tool_name: str | None
     tool_target_kind: ToolTargetKind | None   # file | shell | search | web | mcp
     is_api_error: bool
@@ -402,19 +404,15 @@ decorative.
 
 ## 8. Attribution: main / subagent / headless
 
-Non-interactive work draws on the same subscription bucket as interactive work. Subagent
-and Task spawns are separate model calls with no user turn behind them, and a heavy
-orchestration session otherwise looks like a heavy human.
+Current v0.2 already separates Claude main-chain and sidechain usage, persists sidechain totals, and renders them separately. The remaining work is a headless detector and Codex sidechain coverage.
 
-| Value | Detection |
-|---|---|
-| `headless` | Session with zero interactive user turns, or no statusline hook ever fired for it |
-| `subagent` | Turns originating from a spawned agent context rather than the session root |
-| `main` | Everything else |
+| Value | Current state | Target detection |
+|---|---|---|
+| `headless` | Unbuilt | Session with zero interactive user turns, or no statusline hook ever fired for it |
+| `subagent` | Built for Claude; zeroed for Codex | Turns originating from a spawned agent context rather than the session root |
+| `main` | Built for Claude | Everything else |
 
-Build this as a detector rather than an assumption, even where the expected answer is zero.
-A detector that prints zero costs one query and converts an assumption into a measurement —
-and the answer changes silently the day someone adds a pre-commit hook or a CI review job.
+Build the remaining headless detector rather than assuming zero. A detector that prints zero costs one query and converts an assumption into a measurement — and the answer changes silently the day someone adds a pre-commit hook or a CI review job.
 
 ---
 
@@ -622,10 +620,10 @@ layer; have both projects depend on the extraction.
 |---|---|---|
 | 0 | Empirical schema audit: dump every distinct record type and field across real transcripts; confirm the refusal record shape and whether `reset_at` is machine-parseable | Everything in §4–5 depends on this being real rather than assumed |
 | 1 | Extract `agent-transcript`; `UsageEvent` v1; golden corpus | Round-trips all 8 agents |
-| 2 | SQLite store; watcher migration off CSV; offline enforcement tests | Canary property test passes |
+| 2 | SQLite store; watcher migration off CSV; captured-only cost cutover with provenance; offline enforcement tests | Canary property test passes |
 | 3 | Window engine plus refusal anchoring | Reproduces a hand-verified block from real history |
 | 4 | laconic composition integration; `metermaid report` | Composition sums to 100% of counted tokens |
-| 5 | Attribution detector (main/subagent/headless) | Reports a number, whatever it is |
+| 5 | Headless attribution detector and Codex sidechain coverage | Reports a number, whatever it is |
 | 6 | T0/T1 classifier with abstention | ≥70% coverage at ≥85% precision on 50 labelled sessions |
 | 7 | TUI, `export`, `advise` | Security review passes on export schema |
 | 8 | `metermaid guard` | Fail-open verified; sub-50ms; uninstall reverses cleanly |

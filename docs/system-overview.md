@@ -4,8 +4,9 @@
 **Status:** Design expansion of an existing tracker (formerly `codetrack`)
 **Document date:** 2026-08-16
 **Audience:** Engineering leadership, prospective contributors, internal pilot participants
+**Companion:** [system design](system-design.md)
 
-> **Status: deferred design reference.** This document records promotion candidates beyond the approved v1 personal pilot. It is neither a shipped-capability inventory nor an implementation authority. Rate-limit reconstruction, throttle/stall claims, task classification, TUI, PATH guard, OpenTelemetry, and local-model features remain unapproved until their explicit evidence gates pass.
+> **Status: deferred design reference.** This document records promotion candidates beyond the approved v1 personal pilot. It is neither a shipped-capability inventory nor an implementation authority. Rate-limit reconstruction, throttle/stall claims, task classification, TUI, PATH guard, OpenTelemetry ingest, and local-model features remain unapproved until their explicit evidence gates pass.
 
 ---
 
@@ -28,10 +29,8 @@ Concretely it answers four questions no existing tool answers together:
 ### What it is not
 
 - Not an admin dashboard. There is no server, no org view, no manager rollup by default.
-- Not a cost tool. It captures `costUSD` when the agent reports it and never estimates.
-  Cost analysis belongs to ccusage; metermaid does not compete there.
-- Not a productivity scorer. It never produces a per-developer "efficiency" number, and
-  the export schema is deliberately incapable of supporting one.
+- Not a cost tool by ambition. The current v0.2 runtime captures `costUSD` when the source reports it and otherwise uses its default pricing-table estimate. The target state narrows this to captured-only cost.
+- Not a productivity scorer. It never produces a per-developer "efficiency" number, and the export schema is deliberately incapable of supporting one.
 
 ---
 
@@ -117,7 +116,7 @@ session's task mix. A TUI reads the store. A PATH shim runs before the agent lau
 show remaining budget and — occasionally — ask one question. An export command emits a
 schema-restricted JSON document only when the developer runs it.
 
-### 3.3 The four surfaces
+### 3.3 Surfaces
 
 | Surface | Trigger | Job |
 |---|---|---|
@@ -125,23 +124,22 @@ schema-restricted JSON document only when the developer runs it.
 | statusline hook | Agent render loop | Capture the vendor's own budget gauge |
 | `metermaid guard` | PATH shim on `claude`/`codex`/`gemini` | Pre-flight budget line; one-key stall question |
 | `metermaid` / `report` / `export` / `advise` | User-invoked | Analysis, export, recommendation |
+| `metermaid mcp` | Stdio MCP client | Expose usage summaries, session lists, and cost-window reads |
 
 ### 3.4 What is already built
 
-metermaid exists today as a background watcher for Claude Code and Codex CLI sessions,
-with polling discovery, two-layer deduplication, CSV output, and an optional statusline
-hook. Adjacent components in the same portfolio cover most of the remaining ingest and
-attribution work:
+metermaid currently provides `watch`, `stop`, `status`, `migrate`, `hook`, `backfill`, `consolidate`, `report`, `export`, `mcp`, and `heatmap` commands for Claude Code and Codex CLI sessions. It has polling discovery, two-layer deduplication, CSV snapshots, aggregate reporting, budget/nudge output, and CSV, JSON, Markdown, HTML, and OTLP export.
 
 | Capability | Source | State |
 |---|---|---|
-| Watcher, dedup, statusline parser, CSV/JSON export | metermaid | Built |
+| Watcher, dedup, statusline parser, CSV snapshots, reports, budget, consolidation, and multi-format export | metermaid | Built |
+| MCP server (`get_usage_summary`, `get_session_list`, `get_cost_windows`) | metermaid | Built |
+| Main/subagent sidechain attribution | metermaid | Built for Claude; Codex sidechain values remain zero |
 | Connectors for 8 agents (Claude Code, Codex, Gemini CLI, Cursor, Continue, OpenCode, Aider, Vibe) | searchat | Production, 840+ tests |
 | Token composition taxonomy (observation/action/prose/prompt, price-weighted) | laconic | Runnable script, needs promotion to library |
-| Window engine, stall accounting, task classifier, TUI, guard shim | — | New work |
+| Window engine, stall accounting, task classifier, TUI, guard shim, and OTel ingest | — | New work |
 
-The genuinely new engineering is the derivation layer and the guard. Ingest is a
-consolidation exercise, not a build.
+The genuinely new engineering is the derivation layer and the guard. Ingest is a consolidation exercise, not a build.
 
 ---
 
