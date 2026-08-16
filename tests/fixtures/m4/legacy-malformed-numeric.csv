@@ -1,0 +1,2 @@
+timestamp,provider,model,session_id,cost_usd,ctx_pct,ctx_tokens,ctx_max,wall_sec,api_sec,tokens_in,tokens_out,cache_read,cache_write,diff_add,diff_del,path,source,tok_in_delta,tok_out_delta,sc_tokens_in,sc_tokens_out,sc_cost_usd,sc_models
+2026-08-16T00:00:00Z,claude,fixture-model,fixture-session,0.032,0.5,100,200,1.0,0.5,not-a-number,20,10,5,0,0,<redacted>,fixture,100,20,0,0,0.0,
