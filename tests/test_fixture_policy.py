@@ -116,7 +116,7 @@ def test_audit_rejects_bad_records_without_creating_a_fixture(
     )
 
 
-def test_audit_reports_unreadable_source_without_path_or_stderr(tmp_path: Path) -> None:
+def test_audit_reports_unreadable_source_without_path(tmp_path: Path) -> None:
     source = tmp_path / "private-source.jsonl"
     before = _file_snapshot(tmp_path)
     output = StringIO()
@@ -125,6 +125,49 @@ def test_audit_reports_unreadable_source_without_path_or_stderr(tmp_path: Path) 
 
     assert output.getvalue() == "ERROR source is unreadable\n"
     assert str(source) not in output.getvalue()
+    assert _file_snapshot(tmp_path) == before
+
+
+def test_audit_array_schemas_are_canonical_across_source_order(tmp_path: Path) -> None:
+    source = tmp_path / "array-source.jsonl"
+    first_record: dict[str, list[object]] = {
+        "items": [2, True, None, {"b": 1}, {"a": "text"}, {"b": 2}, []]
+    }
+    second_record: dict[str, list[object]] = {
+        "items": [[], {"b": 2}, {"a": "text"}, {"b": 1}, None, True, 2]
+    }
+    first_output = StringIO()
+    second_output = StringIO()
+
+    source.write_text(json.dumps(first_record) + "\n")
+    assert audit_json_lines(source, first_output) == 0
+    source.write_text(json.dumps(second_record) + "\n")
+    assert audit_json_lines(source, second_output) == 0
+
+    assert first_output.getvalue() == second_output.getvalue()
+    items = json.loads(first_output.getvalue())["schema"]["fields"]["items"]["items"]
+    assert len(items) == 6
+
+
+def test_local_audit_command_reports_unreadable_sources_on_stdout(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "private-source.jsonl"
+    before = _file_snapshot(tmp_path)
+
+    completed = subprocess.run(
+        [sys.executable, str(AUDIT_SCRIPT), str(source)],
+        capture_output=True,
+        check=False,
+        cwd=tmp_path,
+        env={**os.environ, "HOME": str(tmp_path)},
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    assert completed.stdout == "ERROR source is unreadable\n"
+    assert str(source) not in completed.stdout
     assert _file_snapshot(tmp_path) == before
 
 

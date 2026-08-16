@@ -68,7 +68,7 @@ def _audit_stream(stream: Iterable[str], output: TextIO) -> int:
         record_count += 1
         try:
             record = json.loads(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             print(
                 f"ERROR record {record_count} at line {line_number}: malformed JSON",
                 file=output,
