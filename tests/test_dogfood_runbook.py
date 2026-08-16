@@ -118,14 +118,13 @@ def test_runbook_contains_no_leaky_absolute_paths() -> None:
         assert prefix not in text
 
 
-def test_ledger_template_exists_locally_and_carries_no_dates_or_dispositions() -> None:
-    """The local template is not itself a persisted run: no filled-in
-    date or disposition should ever be committed alongside it."""
+def test_local_ledger_allows_active_dates_but_no_final_disposition() -> None:
+    """A live local ledger records the dogfood period but not its outcome."""
     if not LEDGER.exists():
-        pytest.skip("local ledger template not present in this checkout")
+        pytest.skip("local ledger is not present in this checkout")
     text = LEDGER.read_text()
-    assert "<start-date>" in text
-    assert "<STABLE | ITERATE | STOP>" in text
+    assert "Period:" in text
+    assert "Disposition: <STABLE | ITERATE | STOP>" in text
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
