@@ -41,8 +41,9 @@ _DEFAULTS: dict[str, tuple[float, float]] = {
 }
 
 
-def estimate_cost(model: str, provider: str, tokens_in: int, tokens_out: int,
-                  cache_read: int = 0) -> float:
+def estimate_cost(
+    model: str, provider: str, tokens_in: int, tokens_out: int, cache_read: int = 0
+) -> float:
     """Estimate cost from token counts and model pricing.
 
     Claude: cache read at 10% of input rate.
@@ -80,8 +81,10 @@ def stamp_cost(snap: Snapshot) -> Snapshot:
     if snap.cost_usd > 0:
         return snap
     est = estimate_cost(
-        model=snap.model, provider=snap.provider,
-        tokens_in=snap.tokens_in, tokens_out=snap.tokens_out,
+        model=snap.model,
+        provider=snap.provider,
+        tokens_in=snap.tokens_in,
+        tokens_out=snap.tokens_out,
         cache_read=snap.cache_read,
     )
     return replace(snap, cost_usd=est)

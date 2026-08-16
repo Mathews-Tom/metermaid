@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -33,16 +34,21 @@ def _latest_per_session(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return list(best.values())
 
 
-def _split_weeks(all_rows: list[dict[str, str]]) -> tuple[
-    list[dict[str, str]], list[dict[str, str]]
-]:
+def _split_weeks(
+    all_rows: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Split into this-week and last-week latest-per-session rows."""
     now = datetime.now()
     this_cutoff = now - timedelta(days=7)
     last_cutoff = now - timedelta(days=14)
-    this_rows = [r for r in all_rows if datetime.fromisoformat(r["timestamp"]) >= this_cutoff]
-    last_rows = [r for r in all_rows
-                 if last_cutoff <= datetime.fromisoformat(r["timestamp"]) < this_cutoff]
+    this_rows = [
+        r for r in all_rows if datetime.fromisoformat(r["timestamp"]) >= this_cutoff
+    ]
+    last_rows = [
+        r
+        for r in all_rows
+        if last_cutoff <= datetime.fromisoformat(r["timestamp"]) < this_cutoff
+    ]
     return _latest_per_session(this_rows), _latest_per_session(last_rows)
 
 
@@ -60,7 +66,9 @@ def _cache_drop(this: list[dict[str, str]], last: list[dict[str, str]]) -> Nudge
     lw = _cache_pct(last)
     drop = lw - tw
     if drop > 10:
-        return Nudge("warn", f"Cache hit rate dropped {drop:.0f}pp ({lw:.0f}% -> {tw:.0f}%)")
+        return Nudge(
+            "warn", f"Cache hit rate dropped {drop:.0f}pp ({lw:.0f}% -> {tw:.0f}%)"
+        )
     return None
 
 
@@ -71,7 +79,10 @@ def _cost_spike(this: list[dict[str, str]], last: list[dict[str, str]]) -> Nudge
     lw_cost = sum(_float(r, "cost_usd") + _float(r, "sc_cost_usd") for r in last)
     if lw_cost > 0 and tw_cost > lw_cost * 1.2:
         pct = (tw_cost - lw_cost) / lw_cost * 100
-        return Nudge("warn", f"Cost up {pct:.0f}% week-over-week (${lw_cost:.2f} -> ${tw_cost:.2f})")
+        return Nudge(
+            "warn",
+            f"Cost up {pct:.0f}% week-over-week (${lw_cost:.2f} -> ${tw_cost:.2f})",
+        )
     return None
 
 
@@ -86,11 +97,12 @@ def analyze(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> list[
     """Run heuristic checks, return triggered nudges."""
     this_week, last_week = _split_weeks(all_rows)
     nudges: list[Nudge] = []
-    for check in [
+    checks: list[Callable[[], Nudge | None]] = [
         lambda: _cache_drop(this_week, last_week),
         lambda: _cost_spike(this_week, last_week),
         lambda: _context_pressure(_latest_per_session(rows)),
-    ]:
+    ]
+    for check in checks:
         n = check()
         if n:
             nudges.append(n)
@@ -102,5 +114,7 @@ def render_nudges(nudges: list[Nudge]) -> None:
     if not nudges:
         return
     for n in nudges:
-        icon = {"alert": "[red]!![/red]", "warn": "[yellow]![/yellow]"}.get(n.severity, "[dim]i[/dim]")
+        icon = {"alert": "[red]!![/red]", "warn": "[yellow]![/yellow]"}.get(
+            n.severity, "[dim]i[/dim]"
+        )
         console.print(f"  {icon} {n.message}")

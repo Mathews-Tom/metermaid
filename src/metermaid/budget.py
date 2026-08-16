@@ -87,7 +87,9 @@ def check_alerts(config: BudgetConfig, spent: float) -> list[str]:
     alerts: list[str] = []
     for threshold in sorted(config.alert_thresholds):
         if pct >= threshold:
-            alerts.append(f"Budget {threshold}% reached (${spent:.2f} / ${config.monthly_usd:.2f})")
+            alerts.append(
+                f"Budget {threshold}% reached (${spent:.2f} / ${config.monthly_usd:.2f})"
+            )
     return alerts
 
 
@@ -100,7 +102,8 @@ def budget_report(config: BudgetConfig, rows: list[dict[str, str]]) -> None:
     projected = forecast_eom(spent, dom, dim)
 
     t = Table(title="Budget", show_header=False, box=None, padding=(0, 2))
-    t.add_column(style="bold"); t.add_column()
+    t.add_column(style="bold")
+    t.add_column()
     t.add_row("Monthly limit", f"${config.monthly_usd:.2f}")
     t.add_row("Spent", f"${spent:.2f}")
     t.add_row("Projected EOM", f"${projected:.2f}")
@@ -114,7 +117,8 @@ def budget_report(config: BudgetConfig, rows: list[dict[str, str]]) -> None:
         TextColumn("[bold]{task.description}"),
         BarColumn(bar_width=30),
         TextColumn("{task.percentage:.0f}%"),
-        console=console, transient=True,
+        console=console,
+        transient=True,
     ) as progress:
         task = progress.add_task("Budget", total=100)
         progress.update(task, completed=pct * 100)
@@ -122,7 +126,9 @@ def budget_report(config: BudgetConfig, rows: list[dict[str, str]]) -> None:
     bar_filled = int(pct * 30)
     bar_empty = 30 - bar_filled
     color = "green" if pct < 0.75 else "yellow" if pct < 0.90 else "red"
-    console.print(f"  [{color}]{'█' * bar_filled}{'░' * bar_empty}[/{color}] {pct*100:.0f}%")
+    console.print(
+        f"  [{color}]{'█' * bar_filled}{'░' * bar_empty}[/{color}] {pct * 100:.0f}%"
+    )
 
     # Provider breakdown
     for prov, amt in sorted(by_provider.items()):

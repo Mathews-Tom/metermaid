@@ -10,13 +10,30 @@ from metermaid.models import Snapshot
 
 def _snap(tokens_in: int = 1000, tokens_out: int = 500) -> Snapshot:
     return Snapshot(
-        timestamp="2025-01-01T00:00:00", provider="claude", model="test",
-        session_id="abc", cost_usd=0.0, ctx_pct=0.0, ctx_tokens=0,
-        ctx_max=0, wall_sec=0.0, api_sec=0.0, tokens_in=tokens_in,
-        tokens_out=tokens_out, cache_read=0, cache_write=0,
-        diff_add=0, diff_del=0, path="", source="watcher",
-        tok_in_delta=0, tok_out_delta=0,
-        sc_tokens_in=0, sc_tokens_out=0, sc_cost_usd=0.0, sc_models="",
+        timestamp="2025-01-01T00:00:00",
+        provider="claude",
+        model="test",
+        session_id="abc",
+        cost_usd=0.0,
+        ctx_pct=0.0,
+        ctx_tokens=0,
+        ctx_max=0,
+        wall_sec=0.0,
+        api_sec=0.0,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cache_read=0,
+        cache_write=0,
+        diff_add=0,
+        diff_del=0,
+        path="",
+        source="watcher",
+        tok_in_delta=0,
+        tok_out_delta=0,
+        sc_tokens_in=0,
+        sc_tokens_out=0,
+        sc_cost_usd=0.0,
+        sc_models="",
     )
 
 

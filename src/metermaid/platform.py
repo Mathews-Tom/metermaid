@@ -7,7 +7,6 @@ import platform as _platform
 import time
 from pathlib import Path
 
-
 _IS_WINDOWS = _platform.system() == "Windows"
 
 
@@ -23,6 +22,7 @@ def pid_alive(pid: int) -> bool:
     try:
         if _IS_WINDOWS:
             import ctypes
+
             kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
             handle = kernel32.OpenProcess(0x100000, False, pid)
             if handle:
@@ -71,7 +71,7 @@ def claude_project_dirs() -> list[Path]:
     for home in home_roots():
         for base in [
             home / ".config" / "claude" / "projects",  # v1.0.30+
-            home / ".claude" / "projects",              # legacy
+            home / ".claude" / "projects",  # legacy
         ]:
             if base.exists() and base not in dirs:
                 dirs.append(base)

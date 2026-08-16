@@ -7,13 +7,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
 
 from .csv_io import append_snapshot, session_csv_path
 from .models import SESSIONS_DIR, Snapshot
 from .parsers import parse_claude_transcript, parse_codex_session
-from .pricing import stamp_cost
 from .platform import discover_sessions
+from .pricing import stamp_cost
 
 
 @dataclass
@@ -38,10 +44,9 @@ def backfill(
     """Scan all sessions and import those not yet tracked."""
     claude_files, codex_files = discover_sessions(max_age_hours=since_hours)
     all_files: list[tuple[Path, Callable[[Path], Snapshot | None]]] = [
-        (p, parse_claude_transcript) for p in claude_files
-    ] + [
-        (p, parse_codex_session) for p in codex_files
+        (path, parse_claude_transcript) for path in claude_files
     ]
+    all_files.extend((path, parse_codex_session) for path in codex_files)
 
     r = BackfillResult(found=len(all_files))
 
@@ -55,7 +60,8 @@ def backfill(
     ) as progress:
         task = progress.add_task(
             "Backfilling" if not dry_run else "Scanning (dry run)",
-            total=r.found, status="",
+            total=r.found,
+            status="",
         )
         for path, parser in all_files:
             reason = _backfill_one(path, parser, sessions_dir, dry_run, force)

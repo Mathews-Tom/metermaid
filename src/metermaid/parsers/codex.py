@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from ..models import Snapshot, ts_delta
 
@@ -33,7 +34,7 @@ def parse_codex_session(path: Path) -> Snapshot | None:
         return None
 
     # Best source: info.total_token_usage (cumulative, current format)
-    latest_total: dict | None = None
+    latest_total: dict[str, Any] | None = None
 
     # Mid-2025: payload-level token fields (cumulative, need deltas)
     prev_in = 0
@@ -109,8 +110,12 @@ def parse_codex_session(path: Path) -> Snapshot | None:
         if isinstance(msg, dict):
             usage = msg.get("usage", {})
             if isinstance(usage, dict) and usage:
-                fb_in += _int(usage.get("prompt_tokens")) + _int(usage.get("input_tokens"))
-                fb_out += _int(usage.get("completion_tokens")) + _int(usage.get("output_tokens"))
+                fb_in += _int(usage.get("prompt_tokens")) + _int(
+                    usage.get("input_tokens")
+                )
+                fb_out += _int(usage.get("completion_tokens")) + _int(
+                    usage.get("output_tokens")
+                )
                 details = usage.get("prompt_tokens_details", {})
                 if isinstance(details, dict):
                     fb_cached += _int(details.get("cached_tokens"))

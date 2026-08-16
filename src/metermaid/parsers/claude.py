@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from ..models import Snapshot, ts_delta
 
@@ -27,7 +28,7 @@ def parse_claude_transcript(path: Path) -> Snapshot | None:
     cum_cache_r = 0
     cum_cache_w = 0
     cum_cost = 0.0
-    latest_usage: dict | None = None
+    latest_usage: dict[str, Any] | None = None
     model = "unknown"
     first_ts = ""
     latest_ts = ""
