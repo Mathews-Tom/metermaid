@@ -21,11 +21,11 @@ Requires Python 3.11+. Single dependency: `rich`.
 ## Quick start
 
 ```bash
-# Import all existing sessions from disk
-metermaid backfill
+# Import session activity from disk
+metermaid ingest
 
-# Start watching for new activity (background)
-metermaid watch --daemon
+# Start watching for new activity
+metermaid watch
 
 # See what's happening
 metermaid status
@@ -40,20 +40,8 @@ Polls Claude Code and Codex CLI session directories for changes. Both providers 
 
 ```bash
 metermaid watch                  # foreground (Ctrl+C to stop)
-metermaid watch --daemon         # background (writes PID file)
 metermaid watch --interval 5     # custom poll interval (seconds)
-metermaid stop                   # stop background watcher
-metermaid status                 # watcher state + active sessions
-```
-
-### Backfill
-
-Import historical sessions already on disk. Idempotent — skips sessions that are already tracked. Uses each file's modification time as the snapshot timestamp, so historical data appears in the correct report windows.
-
-```bash
-metermaid backfill               # all sessions
-metermaid backfill --since 168   # last 7 days (168 hours)
-metermaid backfill --dry-run     # preview without writing
+metermaid status                 # store + discovery summary
 ```
 
 ### Report
@@ -80,83 +68,12 @@ Report includes:
 
 ### Export
 
-Export session data in multiple formats.
+Export an aggregated, privacy-safe usage summary (grouped by agent) as JSON. Prints the field list and a sample row before writing.
 
 ```bash
-metermaid export --window 30d --out export.csv
-metermaid export --format json --out report.json
-metermaid export --format markdown --out report.md
-metermaid export --format html --out report.html
-metermaid export --format otlp --out metrics.json
+metermaid export                    # writes metermaid_export.json
+metermaid export --out usage.json   # custom output path
 ```
-
-| Format     | Description                                            |
-| ---------- | ------------------------------------------------------ |
-| `csv`      | Raw snapshot rows (default)                            |
-| `json`     | Typed fields (numerics, not all strings)               |
-| `markdown` | Summary stats + session table for PR comments or Slack |
-| `html`     | Standalone report with inline CSS                      |
-| `otlp`     | OpenTelemetry-compatible JSON for Prometheus/Grafana   |
-
-### Heatmap
-
-GitHub-style contributions calendar in the terminal.
-
-```bash
-metermaid heatmap                        # cost by default, last 365 days
-metermaid heatmap --metric tokens        # token volume
-metermaid heatmap --metric sessions      # session count
-metermaid heatmap --days 90              # last 90 days
-```
-
-### Consolidate
-
-Aggregate data into time-windowed summaries with derived metrics (cost/hour, token efficiency, cost/kTok output).
-
-```bash
-metermaid consolidate                    # daily aggregates
-metermaid consolidate --window week      # weekly
-metermaid consolidate --window month     # monthly
-metermaid consolidate --summary          # Claude vs Codex comparison
-```
-
-### MCP server
-
-Expose usage stats as an MCP (Model Context Protocol) server over stdin/stdout. Allows AI assistants to query your usage data programmatically.
-
-```bash
-metermaid mcp
-```
-
-Available tools:
-
-- `get_usage_summary` — aggregate stats (sessions, tokens, cost, cache hit rate)
-- `get_session_list` — per-session details with optional time window filter
-- `get_cost_windows` — cost totals for 5h, 7d, and 30d windows
-
-### Migrate
-
-Copy data from a previous `~/.codetrack/` installation.
-
-```bash
-metermaid migrate
-```
-
-## Budget tracking
-
-Create `~/.metermaid/config.toml` to enable budget monitoring in reports:
-
-```toml
-[budget]
-monthly_usd = 150.00
-alert_thresholds = [50, 75, 90, 100]
-
-[budget.provider]
-claude = 100.00
-codex = 50.00
-```
-
-Reports will show a progress bar, end-of-month cost forecast, and threshold alerts when spending crosses configured percentages.
 
 ## Session discovery
 
@@ -205,19 +122,3 @@ Per-session CSV files at `~/.metermaid/sessions/{provider}_{session_id}.csv`. Ea
 - **Filesystem polling**: Scans session directories every 10 seconds (configurable). No filesystem watchers or inotify — pure polling for maximum portability, including WSL where inotify doesn't work on Windows-side paths.
 - **Deduplication**: Two-layer dedup — mtime check skips unchanged files, content hash (provider + session + token counts) prevents duplicate snapshots when data hasn't changed between polls.
 - **Per-session isolation**: No shared read-modify-write. Multiple watchers across terminals are safe because each session maps to exactly one file.
-- **Cross-platform daemon**: `--daemon` uses `fork` on Unix and `subprocess.Popen` with `DETACHED_PROCESS` on Windows.
-
-## Advanced: statusLine hook
-
-The watcher gets all data from JSONL transcripts. For additional fields (`api_sec`, `diff_add`, `diff_del`), configure Claude Code's statusLine to pipe through metermaid:
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "metermaid hook claude"
-  }
-}
-```

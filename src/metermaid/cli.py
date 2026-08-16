@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -12,14 +11,9 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from .backfill import backfill
-from .compare import provider_comparison
-from .consolidate import aggregate, write_aggregate_csv
-from .csv_io import read_all_snapshots
 from .discover import PILOT_AGENTS
 from .doctor import DoctorReport, build_doctor_report
 from .export_v1 import build_export, export_preview, write_export
-from .hook import handle_claude_hook
 from .ingest import IngestSummary, ingest_once
 from .legacy_v1 import (
     LegacyHistoryReport,
@@ -28,8 +22,7 @@ from .legacy_v1 import (
     build_legacy_report,
     import_legacy_snapshots,
 )
-from .models import DEFAULT_INTERVAL, METERMAID_HOME, PID_FILE, SESSIONS_DIR
-from .report import filter_rows
+from .models import DEFAULT_INTERVAL, SESSIONS_DIR
 from .report_v1 import GroupAggregate, ObservedReport, ReportFilter, build_report
 from .state import load_or_create_secret, resolve_state_paths
 from .store import EventStore
@@ -134,22 +127,6 @@ def _cmd_watch(args: argparse.Namespace) -> None:
     _watch_loop(store, secret, args.interval)
 
 
-def _cmd_stop(args: argparse.Namespace) -> None:
-    """`watch` is foreground-only in v1: there is no daemon process left
-    to signal. This only clears a stale PID file left by a legacy
-    daemon run; it never signals a PID, since by the time this runs a
-    stale PID may already have been silently reused by an unrelated
-    process.
-    """
-    if PID_FILE.exists():
-        PID_FILE.unlink(missing_ok=True)
-        console.print("[dim]Removed a stale watcher PID file.[/dim]")
-    console.print(
-        "[dim]watch runs in the foreground; press Ctrl-C in its terminal "
-        "to stop it.[/dim]"
-    )
-
-
 def _discovery_table(report: DoctorReport) -> Table:
     t = Table(title="Source discovery", box=None)
     t.add_column("Agent", style="cyan")
@@ -195,12 +172,6 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     if not report.counts:
         outcomes.add_row("[dim]none[/dim]", "", "", "")
     console.print(outcomes)
-
-
-def _cmd_hook(args: argparse.Namespace) -> None:
-    raw = sys.stdin.read()
-    if raw.strip():
-        handle_claude_hook(raw, args.data_dir)
 
 
 def _format_optional_int(value: int | None) -> str:
@@ -340,97 +311,12 @@ def _cmd_report(args: argparse.Namespace) -> None:
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
-    from .export import export_dispatch
-
-    rows = read_all_snapshots(args.data_dir)
-    filtered = filter_rows(
-        rows, window=args.window, session=args.session, provider=args.provider
-    )
-    fmt = getattr(args, "format", "csv") or "csv"
-    out = Path(args.out)
-    export_dispatch(filtered, out, fmt)
-    console.print(f"Exported [bold]{len(filtered)}[/bold] rows ({fmt}) -> {out}")
-
-
-def _cmd_export_aggregate(args: argparse.Namespace) -> None:
     store, _secret = _open_v1_store(args)
     document = build_export(store.events())
     console.print(export_preview(document))
     out = Path(args.out)
     write_export(document, out)
     console.print(f"Exported [bold]{len(document.rows)}[/bold] rows -> {out}")
-
-
-def _cmd_backfill(args: argparse.Namespace) -> None:
-    r = backfill(
-        sessions_dir=args.data_dir,
-        since_hours=args.since or 0,
-        dry_run=args.dry_run,
-        force=args.force,
-    )
-    mode = " [dim](dry run)[/dim]" if args.dry_run else ""
-    console.print(
-        f"Backfill{mode}: [bold]{r.found}[/bold] found, "
-        f"[green]{r.imported}[/green] imported, "
-        f"[dim]{r.already_tracked}[/dim] already tracked, "
-        f"[dim]{r.no_data}[/dim] no usage data"
-    )
-
-
-def _cmd_consolidate(args: argparse.Namespace) -> None:
-    rows = read_all_snapshots(args.data_dir)
-    if args.since:
-        rows = [r for r in rows if r.get("timestamp", "") >= args.since]
-    if not rows:
-        console.print("[yellow]No data found.[/yellow]")
-        return
-    agg = aggregate(rows, args.window)
-    if args.summary:
-        provider_comparison(agg)
-        return
-    out_dir = METERMAID_HOME / "data" / f"{args.window}ly"
-    latest = max(r["window"] for r in agg)
-    out_path = out_dir / f"{latest}.csv"
-    write_aggregate_csv(agg, out_path)
-    console.print(f"Wrote [bold]{len(agg)}[/bold] rows -> {out_path}")
-
-
-def _cmd_migrate(args: argparse.Namespace) -> None:
-    import shutil
-
-    old = Path.home() / ".codetrack"
-    new = METERMAID_HOME
-    if not old.exists():
-        console.print("[dim]No ~/.codetrack found — nothing to migrate.[/dim]")
-        return
-    if new.exists() and any(new.iterdir()):
-        console.print("[yellow]~/.metermaid already exists. Skipping.[/yellow]")
-        return
-    new.mkdir(parents=True, exist_ok=True)
-    copied = 0
-    for sub in ("sessions", "state"):
-        src = old / sub
-        if src.exists():
-            shutil.copytree(src, new / sub, dirs_exist_ok=True)
-            copied += len(list(src.iterdir()))
-    console.print(
-        f"[green]Migrated[/green] {copied} files from ~/.codetrack -> ~/.metermaid"
-    )
-
-
-def _cmd_mcp(args: argparse.Namespace) -> None:
-    from .mcp import serve
-
-    serve(args.data_dir)
-
-
-def _cmd_heatmap(args: argparse.Namespace) -> None:
-    from .csv_io import read_all_snapshots as _read
-    from .heatmap import daily_activity, render_heatmap
-
-    rows = _read(args.data_dir)
-    activity = daily_activity(rows, days=args.days, metric=args.metric)
-    render_heatmap(activity, metric=args.metric, days=args.days)
 
 
 def main() -> None:
@@ -450,8 +336,6 @@ def main() -> None:
     w.add_argument("--interval", type=_positive_interval, default=DEFAULT_INTERVAL)
     w.set_defaults(func=_cmd_watch)
 
-    sub.add_parser("stop").set_defaults(func=_cmd_stop)
-
     st = sub.add_parser("status")
     st.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
     st.set_defaults(func=_cmd_status)
@@ -459,24 +343,6 @@ def main() -> None:
     doc = sub.add_parser("doctor")
     doc.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
     doc.set_defaults(func=_cmd_doctor)
-
-    sub.add_parser("migrate").set_defaults(func=_cmd_migrate)
-
-    h = sub.add_parser("hook")
-    h.add_argument("provider", choices=["claude"])
-    h.set_defaults(func=_cmd_hook)
-
-    bf = sub.add_parser("backfill")
-    bf.add_argument("--since", type=int, default=0, metavar="HOURS")
-    bf.add_argument("--dry-run", action="store_true")
-    bf.add_argument("--force", action="store_true")
-    bf.set_defaults(func=_cmd_backfill)
-
-    con = sub.add_parser("consolidate")
-    con.add_argument("--window", choices=["day", "week", "month"], default="day")
-    con.add_argument("--since", type=str, metavar="ISO_DATE")
-    con.add_argument("--summary", action="store_true")
-    con.set_defaults(func=_cmd_consolidate)
 
     rep = sub.add_parser("report")
     rep.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
@@ -488,33 +354,14 @@ def main() -> None:
     rep.set_defaults(func=_cmd_report)
 
     exp = sub.add_parser("export")
-    exp.add_argument("--window")
-    exp.add_argument("--session")
-    exp.add_argument("--provider", choices=["claude", "codex"])
-    exp.add_argument(
-        "--format",
-        choices=["csv", "json", "markdown", "html", "otlp"],
-        default="csv",
-    )
-    exp.add_argument("--out", default="metermaid_export.csv")
+    exp.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    exp.add_argument("--out", default="metermaid_export.json")
     exp.set_defaults(func=_cmd_export)
-
-    expagg = sub.add_parser("export-aggregate")
-    expagg.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
-    expagg.add_argument("--out", default="metermaid_aggregate_export.json")
-    expagg.set_defaults(func=_cmd_export_aggregate)
 
     imp = sub.add_parser("import-legacy")
     imp.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
     imp.add_argument("legacy_dir", type=Path, nargs="?", default=SESSIONS_DIR)
     imp.set_defaults(func=_cmd_import_legacy)
-
-    sub.add_parser("mcp").set_defaults(func=_cmd_mcp)
-
-    hm = sub.add_parser("heatmap")
-    hm.add_argument("--metric", choices=["cost", "tokens", "sessions"], default="cost")
-    hm.add_argument("--days", type=int, default=365)
-    hm.set_defaults(func=_cmd_heatmap)
 
     args = p.parse_args()
     args.func(args)
