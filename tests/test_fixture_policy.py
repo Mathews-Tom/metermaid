@@ -103,7 +103,13 @@ def test_audit_rejects_bad_records_without_creating_a_fixture(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     source = tmp_path / "bad-source.jsonl"
-    source.write_text('["unreviewed source value"]\n{malformed}\n')
+    oversized_integer = "9" * 5000
+    source.write_text(
+        '["unreviewed source value"]\n'
+        "{malformed}\n"
+        f'{{"value": {oversized_integer}}}\n'
+        '{"ok": true}\n'
+    )
     before = _file_snapshot(tmp_path)
     output = StringIO()
 
@@ -113,6 +119,8 @@ def test_audit_rejects_bad_records_without_creating_a_fixture(
     assert output.getvalue() == (
         "ERROR record 1 at line 1: expected JSON object\n"
         "ERROR record 2 at line 2: malformed JSON\n"
+        "ERROR record 3 at line 3: malformed JSON\n"
+        '{"record": 4, "schema": {"fields": {"ok": "boolean"}, "type": "object"}}\n'
     )
 
 
