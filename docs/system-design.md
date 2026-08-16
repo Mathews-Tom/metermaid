@@ -23,13 +23,12 @@ Non-negotiable. Every decision below traces to one of these.
 
 ### 1.1 The quota constraint
 
-Anthropic publishes plan multipliers, not token quotas. A `pct_of_limit_consumed` computed
-from token counts has an invented denominator. Two legitimate channels exist:
+Anthropic publishes plan multipliers, not token quotas. A `pct_of_limit_consumed` computed from token counts has an invented denominator. The following channels are proposed, but each requires source-schema evidence:
 
 | Channel | Provides | Character |
 |---|---|---|
-| Rate-limit refusal in transcript | `reset_at`, authoritative block boundary, weekly anchor | Lagging, exact |
-| Statusline render | The client's own numerator and denominator | Leading, best-effort |
+| Rate-limit refusal in transcript | `reset_at`, authoritative block boundary, weekly anchor | Lagging, exact when verified |
+| Statusline render | Quota numerator, denominator, and reset only if the payload exposes them | Leading, unverified |
 
 The refusal event is worth more than it appears. A 5-hour refusal at 14:32 with reset at
 16:10 establishes that the block opened at 11:10 — retroactive ground truth. A weekly
@@ -198,7 +197,7 @@ Two invariants that matter more than the field list:
 | `stalls` | refusal event | blocked_at, reset_at, mid_task, resume info, `answered` |
 | `composition` | session and turn | observation/action/prose/thinking/cache token split |
 | `classifications` | session | bin distribution, primary_bin, margin, provenance |
-| `statusline` | debounced sample | vendor numerator/denominator per scope |
+| `statusline` | debounced sample | Unverified quota/reset fields; current v0.2 captures context-window and cost only |
 
 `weeks` is keyed on `cap_scope` because Max and Team plans carry two weekly caps — one
 across all models, one Sonnet-only. A developer can be weekly-blocked on Sonnet with
@@ -241,9 +240,7 @@ the derived boundary is rewritten. Blocks carry `source` so the UI can distingui
 "reconstructed" from "confirmed."
 
 **Weekly.** Fixed and account-assigned; not derivable from usage. Resolution order:
-statusline-reported reset → `reset_at` from an observed weekly refusal → one-time user
-config → **suppress weekly metrics entirely**. Never default to Monday 00:00 UTC; a wrong
-anchor produces confidently wrong weekly charts.
+statusline-reported reset, only if the schema audit validates it → `reset_at` from an observed weekly refusal → one-time user config → **suppress weekly metrics entirely**. Never default to Monday 00:00 UTC; a wrong anchor produces confidently wrong weekly charts.
 
 ---
 
@@ -622,7 +619,7 @@ layer; have both projects depend on the extraction.
 
 | Phase | Scope | Gate |
 |---|---|---|
-| 0 | Empirical schema audit: dump every distinct record type and field across real transcripts; confirm the refusal record shape and whether `reset_at` is machine-parseable | Everything in §4–5 depends on this being real rather than assumed |
+| 0 | Empirical schema audit: dump every distinct transcript record type/field and statusline-hook payload field; confirm the refusal record shape and whether `reset_at`, quota numerator/denominator, or reset data are machine-parseable | Everything in §4–5 depends on this being real rather than assumed |
 | 1 | Extract `agent-transcript`; `UsageEvent` v1; golden corpus | Round-trips all 8 agents |
 | 2 | SQLite store; watcher migration off CSV; captured-only cost cutover with provenance; offline enforcement tests | Canary property test passes |
 | 3 | Window engine plus refusal anchoring | Reproduces a hand-verified block from real history |

@@ -397,9 +397,7 @@ One keypress. Stored locally. Never exported unless the developer exports it.
 
 1. Is the rate-limit refusal record machine-parseable, and does it carry `reset_at`?
    Everything in the throttle model depends on this. One day of empirical work.
-2. Does the existing statusline path read Claude Code's own rendered budget figures, or
-   compute them against a locally supplied denominator? The former is a vendor-supplied
-   gauge; the latter inherits the unpublished-quota problem.
+2. Does Claude Code expose a statusline field for a quota numerator, denominator, or reset boundary? The current path captures context-window and cost figures only; the quota channel remains unverified.
 3. What is the actual T0 classifier accuracy against a hand-labeled set of 50 sessions?
    Determines whether tiers 2 and 3 are worth building at all.
 4. Does OTel's quota/limit signal carry anything the transcript does not? If so, the OTel
