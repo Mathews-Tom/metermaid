@@ -6,6 +6,7 @@ import argparse
 import sys
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -15,11 +16,13 @@ from .backfill import backfill
 from .compare import provider_comparison
 from .consolidate import aggregate, write_aggregate_csv
 from .csv_io import read_all_snapshots
+from .discover import PILOT_AGENTS
 from .doctor import DoctorReport, build_doctor_report
 from .hook import handle_claude_hook
 from .ingest import IngestSummary, ingest_once
 from .models import DEFAULT_INTERVAL, METERMAID_HOME, PID_FILE, SESSIONS_DIR
-from .report import filter_rows, report, session_table
+from .report import filter_rows
+from .report_v1 import GroupAggregate, ObservedReport, ReportFilter, build_report
 from .state import load_or_create_secret, resolve_state_paths
 from .store import EventStore
 
@@ -79,6 +82,19 @@ def _positive_interval(value: str) -> int:
             "--interval must be a positive number of seconds"
         )
     return parsed
+
+
+def _parse_range_bound(value: str) -> datetime:
+    """Parse an ISO-8601 timestamp into an aware-UTC report-range bound."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid ISO-8601 timestamp: {value!r}"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _watch_loop(
@@ -179,23 +195,75 @@ def _cmd_hook(args: argparse.Namespace) -> None:
         handle_claude_hook(raw, args.data_dir)
 
 
-def _cmd_report(args: argparse.Namespace) -> None:
-    all_rows = read_all_snapshots(args.data_dir)
-    filtered = filter_rows(
-        all_rows, window=args.window, session=args.session, provider=args.provider
+def _format_optional_int(value: int | None) -> str:
+    return str(value) if value is not None else "unavailable"
+
+
+def _format_optional_cost(value: float | None) -> str:
+    return f"{value:.4f}" if value is not None else "unavailable"
+
+
+def _report_group_table(
+    title: str, key_header: str, rows: tuple[GroupAggregate, ...]
+) -> Table:
+    t = Table(title=title, box=None)
+    t.add_column(key_header, style="cyan")
+    t.add_column("Events", justify="right")
+    t.add_column("Sessions", justify="right")
+    t.add_column("Tokens in", justify="right")
+    t.add_column("Tokens out", justify="right")
+    t.add_column("Cache read", justify="right")
+    t.add_column("Cache write", justify="right")
+    t.add_column("Reasoning", justify="right")
+    t.add_column("Cost (USD)", justify="right")
+    for row in rows:
+        t.add_row(
+            row.key,
+            str(row.event_count),
+            str(row.session_count),
+            _format_optional_int(row.tokens.tokens_in),
+            _format_optional_int(row.tokens.tokens_out),
+            _format_optional_int(row.tokens.cache_read),
+            _format_optional_int(row.tokens.cache_write),
+            _format_optional_int(row.tokens.reasoning_tokens),
+            _format_optional_cost(row.provider_cost_usd),
+        )
+    if not rows:
+        t.add_row("[dim]none[/dim]", "", "", "", "", "", "", "", "")
+    return t
+
+
+def _print_observed_report(observed: ObservedReport) -> None:
+    console.print(
+        f"Observed: [bold]{observed.event_count}[/bold] events, "
+        f"[cyan]{observed.session_count}[/cyan] sessions"
     )
-    parts = [
-        x
-        for x in [
-            args.window,
-            args.provider,
-            f"session {args.session}" if args.session else None,
-        ]
-        if x
-    ]
-    console.rule(f"metermaid ({' | '.join(parts) or 'all time'})")
-    report(filtered, all_rows)
-    session_table(filtered)
+    console.print(
+        f"Totals: in={_format_optional_int(observed.tokens.tokens_in)} "
+        f"out={_format_optional_int(observed.tokens.tokens_out)} "
+        f"cache_read={_format_optional_int(observed.tokens.cache_read)} "
+        f"cache_write={_format_optional_int(observed.tokens.cache_write)} "
+        f"reasoning={_format_optional_int(observed.tokens.reasoning_tokens)} "
+        f"cost_usd={_format_optional_cost(observed.provider_cost_usd)}"
+    )
+    console.print(_report_group_table("By agent", "Agent", observed.by_agent))
+    console.print(_report_group_table("By model", "Model", observed.by_model))
+    console.print(
+        _report_group_table("By project key", "Project key", observed.by_project_key)
+    )
+
+
+def _cmd_report(args: argparse.Namespace) -> None:
+    store, _secret = _open_v1_store(args)
+    filter_ = ReportFilter(
+        since=args.since,
+        until=args.until,
+        agent=args.agent,
+        model=args.model,
+        project_key=args.project_key,
+    )
+    observed = build_report(store.events(), filter_)
+    _print_observed_report(observed)
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
@@ -328,19 +396,26 @@ def main() -> None:
     con.add_argument("--summary", action="store_true")
     con.set_defaults(func=_cmd_consolidate)
 
-    for name, func in [("report", _cmd_report), ("export", _cmd_export)]:
-        s = sub.add_parser(name)
-        s.add_argument("--window")
-        s.add_argument("--session")
-        s.add_argument("--provider", choices=["claude", "codex"])
-        if name == "export":
-            s.add_argument(
-                "--format",
-                choices=["csv", "json", "markdown", "html", "otlp"],
-                default="csv",
-            )
-            s.add_argument("--out", default="metermaid_export.csv")
-        s.set_defaults(func=func)
+    rep = sub.add_parser("report")
+    rep.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    rep.add_argument("--since", type=_parse_range_bound, default=None)
+    rep.add_argument("--until", type=_parse_range_bound, default=None)
+    rep.add_argument("--agent", choices=PILOT_AGENTS, default=None)
+    rep.add_argument("--model", default=None)
+    rep.add_argument("--project-key", default=None)
+    rep.set_defaults(func=_cmd_report)
+
+    exp = sub.add_parser("export")
+    exp.add_argument("--window")
+    exp.add_argument("--session")
+    exp.add_argument("--provider", choices=["claude", "codex"])
+    exp.add_argument(
+        "--format",
+        choices=["csv", "json", "markdown", "html", "otlp"],
+        default="csv",
+    )
+    exp.add_argument("--out", default="metermaid_export.csv")
+    exp.set_defaults(func=_cmd_export)
 
     sub.add_parser("mcp").set_defaults(func=_cmd_mcp)
 
