@@ -3,76 +3,174 @@
 from __future__ import annotations
 
 import argparse
-import os
-import signal
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from rich.console import Console
+from rich.table import Table
 
 from .backfill import backfill
 from .compare import provider_comparison
 from .consolidate import aggregate, write_aggregate_csv
 from .csv_io import read_all_snapshots
+from .doctor import DoctorReport, build_doctor_report
 from .hook import handle_claude_hook
+from .ingest import IngestSummary, ingest_once
 from .models import DEFAULT_INTERVAL, METERMAID_HOME, PID_FILE, SESSIONS_DIR
-from .platform import discover_sessions, is_wsl, pid_alive
 from .report import filter_rows, report, session_table
-from .watcher import SessionWatcher
+from .state import load_or_create_secret, resolve_state_paths
+from .store import EventStore
 
 console = Console()
 
 
+def _resolve_v1_data_dir(args: argparse.Namespace) -> Path | None:
+    """Resolve the effective v1 state root.
+
+    A subcommand-level ``--data-dir`` (``dest="v1_data_dir"``) always
+    wins. Otherwise, an explicit top-level ``--data-dir`` given before
+    the subcommand — a value that differs from the legacy
+    ``SESSIONS_DIR`` default meant only for the CSV-era commands — is
+    honored too, so ``metermaid --data-dir X ingest`` keeps working.
+    When neither is given, this returns ``None`` so
+    ``resolve_state_paths`` applies its own bare v1 default instead of
+    nesting the v1 store under the legacy sessions subdirectory.
+    """
+    override = getattr(args, "v1_data_dir", None)
+    if override is not None:
+        return Path(override)
+    top_level = getattr(args, "data_dir", None)
+    if top_level is not None and top_level != SESSIONS_DIR:
+        return Path(top_level)
+    return None
+
+
+def _open_v1_store(args: argparse.Namespace) -> tuple[EventStore, bytes]:
+    """Resolve the v1 state root and open its store with a loaded secret."""
+    paths = resolve_state_paths(_resolve_v1_data_dir(args))
+    secret = load_or_create_secret(paths)
+    store = EventStore(paths.database)
+    store.initialize()
+    return store, secret
+
+
+def _print_ingest_summary(summary: IngestSummary) -> None:
+    console.print(
+        f"Ingest: [bold]{summary.files_read}[/bold] files read, "
+        f"[green]{summary.events_inserted}[/green] events inserted, "
+        f"[dim]{summary.diagnostics_recorded}[/dim] diagnostics recorded"
+    )
+
+
+def _cmd_ingest(args: argparse.Namespace) -> None:
+    store, secret = _open_v1_store(args)
+    _print_ingest_summary(ingest_once(store, secret))
+
+
+def _positive_interval(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid interval: {value!r}") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(
+            "--interval must be a positive number of seconds"
+        )
+    return parsed
+
+
+def _watch_loop(
+    store: EventStore,
+    secret: bytes,
+    interval: int,
+    *,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """Foreground incremental-ingest polling loop; stops on ``KeyboardInterrupt``.
+
+    ``sleep`` is resolved at call time (via ``time.sleep`` when ``None``)
+    rather than bound as a default at function-definition time, so a
+    test can intercept the real ``time.sleep`` through ``time`` module
+    patching even when this is invoked indirectly through ``_cmd_watch``.
+    """
+    wait = sleep if sleep is not None else time.sleep
+    try:
+        while True:
+            _print_ingest_summary(ingest_once(store, secret))
+            wait(interval)
+    except KeyboardInterrupt:
+        console.print("[dim]Stopped[/dim]")
+
+
 def _cmd_watch(args: argparse.Namespace) -> None:
-    SessionWatcher(args.data_dir, args.interval).run(daemon=args.daemon)
+    store, secret = _open_v1_store(args)
+    console.print(f"[bold]metermaid[/bold] watching (interval={args.interval}s)")
+    _watch_loop(store, secret, args.interval)
 
 
 def _cmd_stop(args: argparse.Namespace) -> None:
-    if not PID_FILE.exists():
-        console.print("[yellow]No watcher running[/yellow]")
-        return
-    pid = int(PID_FILE.read_text().strip())
-    try:
-        os.kill(pid, signal.SIGTERM)
-        console.print(f"[green]Stopped[/green] (PID {pid})")
-    except (OSError, ProcessLookupError):
-        console.print(f"[yellow]PID {pid} stale[/yellow]")
+    """`watch` is foreground-only in v1: there is no daemon process left
+    to signal. This only clears a stale PID file left by a legacy
+    daemon run; it never signals a PID, since by the time this runs a
+    stale PID may already have been silently reused by an unrelated
+    process.
+    """
+    if PID_FILE.exists():
         PID_FILE.unlink(missing_ok=True)
+        console.print("[dim]Removed a stale watcher PID file.[/dim]")
+    console.print(
+        "[dim]watch runs in the foreground; press Ctrl-C in its terminal "
+        "to stop it.[/dim]"
+    )
+
+
+def _discovery_table(report: DoctorReport) -> Table:
+    t = Table(title="Source discovery", box=None)
+    t.add_column("Agent", style="cyan")
+    t.add_column("Enabled")
+    t.add_column("Roots present", justify="right")
+    for agent in report.discovery:
+        t.add_row(
+            agent.agent,
+            "[green]yes[/green]" if agent.enabled else "[yellow]no[/yellow]",
+            f"{agent.roots_present}/{agent.roots_documented}",
+        )
+    return t
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
-    import platform as _platform
+    store, _secret = _open_v1_store(args)
+    events = store.events()
+    diagnostics = store.diagnostics()
+    sessions = {event.source_session_id for event in events}
+    diagnostic_total = sum(outcome.count for outcome in diagnostics)
 
-    if PID_FILE.exists():
-        pid = int(PID_FILE.read_text().strip())
-        if pid_alive(pid):
-            console.print(f"Watcher: [green]running[/green] (PID {pid})")
-        else:
-            console.print("Watcher: [yellow]stopped (stale PID)[/yellow]")
-    else:
-        console.print("Watcher: [dim]not running[/dim]")
+    console.print(
+        f"Store: [bold]{len(events)}[/bold] events, "
+        f"[cyan]{len(sessions)}[/cyan] sessions, "
+        f"[dim]{diagnostic_total}[/dim] diagnostics"
+    )
+    console.print(_discovery_table(build_doctor_report(store)))
 
-    from rich.table import Table
 
-    claude, codex = discover_sessions(max_age_hours=1)
-    t = Table(title="Active sessions (last 1h)", box=None)
-    t.add_column("Session", style="cyan")
-    t.add_column("Provider")
-    t.add_column("Age")
-    t.add_column("Project", style="dim")
-    for s in claude[:10]:
-        age = (time.time() - s.stat().st_mtime) / 60
-        t.add_row(s.stem[:12], "claude", f"{age:.0f}m ago", s.parent.name[:25])
-    for s in codex[:10]:
-        age = (time.time() - s.stat().st_mtime) / 60
-        t.add_row(s.stem[:12], "codex", f"{age:.0f}m ago", "")
-    if not claude and not codex:
-        t.add_row("[dim]none[/dim]", "", "", "")
-    console.print(t)
-    n = len(list(args.data_dir.glob("*.csv"))) if args.data_dir.exists() else 0
-    console.print(f"\nPlatform: {_platform.system()}" + (" (WSL)" if is_wsl() else ""))
-    console.print(f"Data dir: {args.data_dir} ({n} session files)")
+def _cmd_doctor(args: argparse.Namespace) -> None:
+    store, _secret = _open_v1_store(args)
+    report = build_doctor_report(store)
+
+    console.print(_discovery_table(report))
+
+    outcomes = Table(title="Parse outcomes", box=None)
+    outcomes.add_column("Agent", style="cyan")
+    outcomes.add_column("Discriminator")
+    outcomes.add_column("Kind")
+    outcomes.add_column("Count", justify="right")
+    for row in report.counts:
+        outcomes.add_row(row.agent, row.discriminator, row.kind, str(row.count))
+    if not report.counts:
+        outcomes.add_row("[dim]none[/dim]", "", "", "")
+    console.print(outcomes)
 
 
 def _cmd_hook(args: argparse.Namespace) -> None:
@@ -193,13 +291,25 @@ def main() -> None:
     p.add_argument("--data-dir", type=Path, default=SESSIONS_DIR)
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    ing = sub.add_parser("ingest")
+    ing.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    ing.set_defaults(func=_cmd_ingest)
+
     w = sub.add_parser("watch")
-    w.add_argument("--interval", type=int, default=DEFAULT_INTERVAL)
-    w.add_argument("--daemon", action="store_true")
+    w.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    w.add_argument("--interval", type=_positive_interval, default=DEFAULT_INTERVAL)
     w.set_defaults(func=_cmd_watch)
 
     sub.add_parser("stop").set_defaults(func=_cmd_stop)
-    sub.add_parser("status").set_defaults(func=_cmd_status)
+
+    st = sub.add_parser("status")
+    st.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    st.set_defaults(func=_cmd_status)
+
+    doc = sub.add_parser("doctor")
+    doc.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    doc.set_defaults(func=_cmd_doctor)
+
     sub.add_parser("migrate").set_defaults(func=_cmd_migrate)
 
     h = sub.add_parser("hook")

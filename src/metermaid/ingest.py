@@ -80,6 +80,17 @@ _ADAPTERS: Mapping[str, SourceAdapter] = {
 }
 """The pilot's four enabled, fixture-backed adapters, keyed by agent."""
 
+
+def enabled_agents() -> frozenset[str]:
+    """Return the pilot agents with a registered, fixture-backed adapter.
+
+    ``doctor`` uses this to separate factual root discovery from an
+    actually enabled parsing capability: a documented root existing on
+    disk never implies its agent is enabled by itself.
+    """
+    return frozenset(_ADAPTERS)
+
+
 _INVALID_JSON = "invalid-json"
 """Discriminator recorded when a line is not a decodable JSON object."""
 
