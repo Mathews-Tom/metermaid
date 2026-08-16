@@ -157,25 +157,27 @@ class UsageEvent(BaseModel):
     event_id: str
     agent: AgentKind
     session_id: str
-    project_key: str              # HMAC(machine_salt, abspath) — raw path never stored
+    project_key: str  # HMAC(machine_salt, abspath) — raw path never stored
     git_branch: str | None
-    ts: datetime                  # tz-aware UTC
+    ts: datetime  # tz-aware UTC
     role: Literal["user", "assistant", "system", "tool_result"]
     model: str | None
     input_tokens: int
     output_tokens: int
     cache_creation_tokens: int
     cache_read_tokens: int
-    thinking_tokens: int | None   # None = not reported; 0 = reported zero
-    cost_usd: Decimal | None      # captured-only after the explicit v1 cutover
+    thinking_tokens: int | None  # None = not reported; 0 = reported zero
+    cost_usd: Decimal | None  # captured-only after the explicit v1 cutover
     tool_name: str | None
-    tool_target_kind: ToolTargetKind | None   # file | shell | search | web | mcp
+    tool_target_kind: ToolTargetKind | None  # file | shell | search | web | mcp
     is_api_error: bool
-    error_class: ErrorClass | None            # rate_limit_5h | rate_limit_weekly | overloaded | other
+    error_class: (
+        ErrorClass | None
+    )  # rate_limit_5h | rate_limit_weekly | overloaded | other
     reset_at: datetime | None
     turn_index: int
     parent_uuid: str | None
-    attribution: Attribution      # main | subagent | headless
+    attribution: Attribution  # main | subagent | headless
 ```
 
 Two invariants that matter more than the field list:
