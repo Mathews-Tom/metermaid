@@ -19,8 +19,10 @@ def sparkline(values: list[float], width: int = 7) -> str:
     vals = values[-width:]
     lo, hi = min(vals), max(vals)
     spread = hi - lo if hi > lo else 1.0
-    return "".join(_BARS[min(8, max(1, int((v - lo) / spread * 8)))] if v > 0 else _BARS[0]
-                   for v in vals)
+    return "".join(
+        _BARS[min(8, max(1, int((v - lo) / spread * 8)))] if v > 0 else _BARS[0]
+        for v in vals
+    )
 
 
 def _int(row: dict[str, str], key: str) -> int:
@@ -32,7 +34,8 @@ def _float(row: dict[str, str], key: str) -> float:
 
 
 def _latest_per_session_day(
-    rows: list[dict[str, str]], date: str,
+    rows: list[dict[str, str]],
+    date: str,
 ) -> list[dict[str, str]]:
     """Latest snapshot per session for a given date string (YYYY-MM-DD)."""
     best: dict[str, dict[str, str]] = {}
@@ -81,9 +84,11 @@ def cost_windows(all_rows: list[dict[str, str]]) -> None:
     t.add_column("Cost / Tokens", justify="right")
     t.add_column("Sessions", justify="right", style="dim")
 
-    for label, delta in [("5h", timedelta(hours=5)),
-                         ("7d", timedelta(days=7)),
-                         ("30d", timedelta(days=30))]:
+    for label, delta in [
+        ("5h", timedelta(hours=5)),
+        ("7d", timedelta(days=7)),
+        ("30d", timedelta(days=30)),
+    ]:
         cutoff = now - delta
         wr = [r for r in all_rows if datetime.fromisoformat(r["timestamp"]) >= cutoff]
         wl = latest_per_session(wr)
@@ -93,14 +98,21 @@ def cost_windows(all_rows: list[dict[str, str]]) -> None:
             p = r["provider"]
             c = _float(r, "cost_usd") + _float(r, "sc_cost_usd")
             by_p[p] = by_p.get(p, 0) + c
-            tok = (_int(r, "tokens_in") + _int(r, "tokens_out")
-                   + _int(r, "sc_tokens_in") + _int(r, "sc_tokens_out"))
+            tok = (
+                _int(r, "tokens_in")
+                + _int(r, "tokens_out")
+                + _int(r, "sc_tokens_in")
+                + _int(r, "sc_tokens_out")
+            )
             by_p_tok[p] = by_p_tok.get(p, 0) + tok
         total_c = sum(by_p.values())
         total_t = sum(by_p_tok.values())
         parts = " + ".join(f"{p}=${v:.2f}" for p, v in sorted(by_p.items()) if v > 0)
-        val = (f"[green]${total_c:.3f}[/green] ({parts})" if total_c > 0
-               else f"{total_t:,} tokens")
+        val = (
+            f"[green]${total_c:.3f}[/green] ({parts})"
+            if total_c > 0
+            else f"{total_t:,} tokens"
+        )
         t.add_row(label, val, str(len(wl)))
     console.print(t)
 
@@ -113,9 +125,14 @@ def week_over_week(all_rows: list[dict[str, str]]) -> None:
     this_cutoff = now - timedelta(days=7)
     last_cutoff = now - timedelta(days=14)
 
-    this_rows = [r for r in all_rows if datetime.fromisoformat(r["timestamp"]) >= this_cutoff]
-    last_rows = [r for r in all_rows
-                 if last_cutoff <= datetime.fromisoformat(r["timestamp"]) < this_cutoff]
+    this_rows = [
+        r for r in all_rows if datetime.fromisoformat(r["timestamp"]) >= this_cutoff
+    ]
+    last_rows = [
+        r
+        for r in all_rows
+        if last_cutoff <= datetime.fromisoformat(r["timestamp"]) < this_cutoff
+    ]
 
     this_l = latest_per_session(this_rows)
     last_l = latest_per_session(last_rows)
@@ -165,7 +182,11 @@ def week_over_week(all_rows: list[dict[str, str]]) -> None:
     cache_delta = _delta_good_up(tw_cache, lw_cache)
     t.add_row("Cache hit", f"{tw_cache:.0f}%", f"{lw_cache:.0f}%", cache_delta)
 
-    t.add_row("Sessions", str(len(this_l)), str(len(last_l)),
-              _delta(float(len(this_l)), float(len(last_l))))
+    t.add_row(
+        "Sessions",
+        str(len(this_l)),
+        str(len(last_l)),
+        _delta(float(len(this_l)), float(len(last_l))),
+    )
 
     console.print(t)

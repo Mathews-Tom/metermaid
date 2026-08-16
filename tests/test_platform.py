@@ -68,6 +68,7 @@ def test_old_sessions_excluded(tmp_path: Path) -> None:
     # Set mtime to 48 hours ago
     old_time = time.time() - 48 * 3600
     import os
+
     os.utime(f, (old_time, old_time))
 
     with patch("metermaid.platform.home_roots", return_value=[home]):

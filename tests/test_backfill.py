@@ -12,8 +12,9 @@ from metermaid.backfill import backfill
 from metermaid.csv_io import read_all_snapshots
 
 
-def _make_claude_session(base: Path, project: str, session: str,
-                          tokens_in: int = 100, age_hours: float = 0) -> Path:
+def _make_claude_session(
+    base: Path, project: str, session: str, tokens_in: int = 100, age_hours: float = 0
+) -> Path:
     proj_dir = base / project
     proj_dir.mkdir(parents=True, exist_ok=True)
     f = proj_dir / f"{session}.jsonl"
@@ -77,6 +78,7 @@ def test_backfill_uses_file_mtime(tmp_path: Path) -> None:
     rows = read_all_snapshots(sessions_dir)
     assert len(rows) == 1
     from datetime import datetime, timedelta
+
     ts = datetime.fromisoformat(rows[0]["timestamp"])
     assert ts < datetime.now() - timedelta(hours=47)
 

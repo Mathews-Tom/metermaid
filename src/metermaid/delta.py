@@ -12,7 +12,9 @@ from pathlib import Path
 from .models import STATE_DIR, Snapshot
 
 
-def load_state(provider: str, session_id: str, state_dir: Path = STATE_DIR) -> tuple[int, int]:
+def load_state(
+    provider: str, session_id: str, state_dir: Path = STATE_DIR
+) -> tuple[int, int]:
     """Load previous (tok_in, tok_out) from sidecar .state file."""
     state_file = state_dir / f"{provider}_{session_id}.state"
     if state_file.exists():
@@ -24,8 +26,13 @@ def load_state(provider: str, session_id: str, state_dir: Path = STATE_DIR) -> t
     return 0, 0
 
 
-def save_state(provider: str, session_id: str, tok_in: int, tok_out: int,
-               state_dir: Path = STATE_DIR) -> None:
+def save_state(
+    provider: str,
+    session_id: str,
+    tok_in: int,
+    tok_out: int,
+    state_dir: Path = STATE_DIR,
+) -> None:
     """Persist current cumulative tokens for next delta computation."""
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / f"{provider}_{session_id}.state"
@@ -37,5 +44,7 @@ def compute_deltas(snap: Snapshot, state_dir: Path = STATE_DIR) -> Snapshot:
     prev_in, prev_out = load_state(snap.provider, snap.session_id, state_dir)
     delta_in = max(0, snap.tokens_in - prev_in)
     delta_out = max(0, snap.tokens_out - prev_out)
-    save_state(snap.provider, snap.session_id, snap.tokens_in, snap.tokens_out, state_dir)
+    save_state(
+        snap.provider, snap.session_id, snap.tokens_in, snap.tokens_out, state_dir
+    )
     return replace(snap, tok_in_delta=delta_in, tok_out_delta=delta_out)

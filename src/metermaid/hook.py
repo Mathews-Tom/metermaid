@@ -72,5 +72,3 @@ def handle_claude_hook(raw: str, sessions_dir: Path = SESSIONS_DIR) -> None:
         f"{ik:.0f}k in {ok_:.0f}k out | "
         f"+{snap.diff_add} -{snap.diff_del}"
     )
-
-

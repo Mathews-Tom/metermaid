@@ -19,7 +19,9 @@ def _float(row: dict[str, str], key: str) -> float:
 
 
 def daily_activity(
-    rows: list[dict[str, str]], days: int = 365, metric: str = "cost",
+    rows: list[dict[str, str]],
+    days: int = 365,
+    metric: str = "cost",
 ) -> dict[str, float]:
     """Map date string -> activity score."""
     best: dict[tuple[str, str], dict[str, str]] = {}
@@ -67,7 +69,9 @@ def _intensity(value: float, max_val: float) -> int:
 
 
 def render_heatmap(
-    activity: dict[str, float], metric: str = "cost", days: int = 365,
+    activity: dict[str, float],
+    metric: str = "cost",
+    days: int = 365,
 ) -> None:
     """Print GitHub-style contributions calendar."""
     today = datetime.now().date()
@@ -101,7 +105,9 @@ def render_heatmap(
         first_date = w[0][0]
         month = first_date[5:7]
         if month != prev_month:
-            month_labels.append(datetime.strptime(first_date, "%Y-%m-%d").strftime("%b")[:3])
+            month_labels.append(
+                datetime.strptime(first_date, "%Y-%m-%d").strftime("%b")[:3]
+            )
             prev_month = month
         else:
             month_labels.append(" ")
@@ -122,7 +128,6 @@ def render_heatmap(
         console.print(row)
 
     # Summary
-    unit = {"cost": "$", "tokens": "", "sessions": ""}.get(metric, "")
     if metric == "cost":
         total_str = f"${total:.2f}"
     elif metric == "tokens":

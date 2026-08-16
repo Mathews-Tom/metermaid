@@ -30,8 +30,11 @@ def window_delta(w: str) -> timedelta:
 
 
 def filter_rows(
-    rows: list[dict[str, str]], *,
-    window: str | None = None, session: str | None = None, provider: str | None = None,
+    rows: list[dict[str, str]],
+    *,
+    window: str | None = None,
+    session: str | None = None,
+    provider: str | None = None,
 ) -> list[dict[str, str]]:
     out = rows
     if window:
@@ -85,7 +88,8 @@ def report(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> None:
     provs = sorted({r["provider"] for r in latest})
 
     t = Table(show_header=False, box=None, padding=(0, 2))
-    t.add_column(style="bold"); t.add_column()
+    t.add_column(style="bold")
+    t.add_column()
     t.add_row("Sessions", str(len(latest)))
     t.add_row("Providers", ", ".join(provs))
     t.add_row("Tokens in", f"{tok_in:,}")
@@ -100,9 +104,9 @@ def report(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> None:
         if sc_cost > 0:
             cost_str += f" + [yellow]${sc_cost:.3f} subagent[/yellow]"
         t.add_row("Cost (USD)", cost_str)
-    t.add_row("Wall time", f"{wall:.0f}s ({wall/60:.1f}m)")
+    t.add_row("Wall time", f"{wall:.0f}s ({wall / 60:.1f}m)")
     if api > 0:
-        t.add_row("API time", f"{api:.0f}s ({api/60:.1f}m)")
+        t.add_row("API time", f"{api:.0f}s ({api / 60:.1f}m)")
 
     # Cache hit rate
     total_cache = sum(_int(r, "cache_read") for r in latest)
@@ -129,12 +133,14 @@ def report(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> None:
 
     # Budget gauge (if configured)
     from .budget import budget_report, load_config
+
     cfg = load_config()
     if cfg and cfg.monthly_usd > 0:
         budget_report(cfg, all_rows)
 
     # Actionable nudges
     from .nudges import analyze, render_nudges
+
     nudges = analyze(rows, all_rows)
     render_nudges(nudges)
 
@@ -144,7 +150,9 @@ def session_table(rows: list[dict[str, str]]) -> None:
     if not latest:
         return
 
-    has_sc = any(_int(r, "sc_tokens_in") > 0 or _int(r, "sc_tokens_out") > 0 for r in latest)
+    has_sc = any(
+        _int(r, "sc_tokens_in") > 0 or _int(r, "sc_tokens_out") > 0 for r in latest
+    )
 
     t = Table(title="Sessions", highlight=True)
     t.add_column("Date/Time (UTC)", style="dim")
@@ -172,16 +180,22 @@ def session_table(rows: list[dict[str, str]]) -> None:
         ti = _int(r, "tokens_in")
         cpct = _cache_hit_pct(cr, ti)
         row = [
-            ts, r["session_id"][:12], r["provider"], r["model"][:22],
-            f"{ti:,}", f"{_int(r, 'tokens_out'):,}",
+            ts,
+            r["session_id"][:12],
+            r["provider"],
+            r["model"][:22],
+            f"{ti:,}",
+            f"{_int(r, 'tokens_out'):,}",
         ]
         if has_sc:
             si, so = _int(r, "sc_tokens_in"), _int(r, "sc_tokens_out")
-            row.extend([
-                f"{si:,}" if si else "[dim]—[/dim]",
-                f"{so:,}" if so else "[dim]—[/dim]",
-                r.get("sc_models", "") or "[dim]—[/dim]",
-            ])
+            row.extend(
+                [
+                    f"{si:,}" if si else "[dim]—[/dim]",
+                    f"{so:,}" if so else "[dim]—[/dim]",
+                    r.get("sc_models", "") or "[dim]—[/dim]",
+                ]
+            )
         row.extend([cost_s, _color_cache(cpct), ctx_s, f"{_float(r, 'wall_sec'):.0f}s"])
         t.add_row(*row)
     console.print(t)

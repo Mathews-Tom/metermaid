@@ -21,15 +21,30 @@ def _make_row(
 ) -> dict[str, str]:
     ts = timestamp or datetime.now().isoformat(timespec="seconds")
     defaults = {
-        "timestamp": ts, "provider": provider, "model": "test-model",
-        "session_id": session_id, "cost_usd": str(cost_usd),
-        "ctx_pct": "50.0", "ctx_tokens": "100000", "ctx_max": "200000",
-        "wall_sec": "60.0", "api_sec": "30.0",
-        "tokens_in": str(tokens_in), "tokens_out": str(tokens_out),
-        "cache_read": "0", "cache_write": "0",
-        "diff_add": "0", "diff_del": "0", "path": "/test", "source": "watcher",
-        "tok_in_delta": "0", "tok_out_delta": "0",
-        "sc_tokens_in": "0", "sc_tokens_out": "0", "sc_cost_usd": "0", "sc_models": "",
+        "timestamp": ts,
+        "provider": provider,
+        "model": "test-model",
+        "session_id": session_id,
+        "cost_usd": str(cost_usd),
+        "ctx_pct": "50.0",
+        "ctx_tokens": "100000",
+        "ctx_max": "200000",
+        "wall_sec": "60.0",
+        "api_sec": "30.0",
+        "tokens_in": str(tokens_in),
+        "tokens_out": str(tokens_out),
+        "cache_read": "0",
+        "cache_write": "0",
+        "diff_add": "0",
+        "diff_del": "0",
+        "path": "/test",
+        "source": "watcher",
+        "tok_in_delta": "0",
+        "tok_out_delta": "0",
+        "sc_tokens_in": "0",
+        "sc_tokens_out": "0",
+        "sc_cost_usd": "0",
+        "sc_models": "",
     }
     defaults.update(kwargs)
     return defaults
@@ -38,6 +53,7 @@ def _make_row(
 def _capture_report(rows: list[dict[str, str]], all_rows: list[dict[str, str]]) -> str:
     """Capture rich console output from report() as plain text."""
     import metermaid.report as mod
+
     buf = io.StringIO()
     old_console = mod.console
     mod.console = Console(file=buf, force_terminal=False, width=120)

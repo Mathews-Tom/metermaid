@@ -14,12 +14,27 @@ from pathlib import Path
 
 from .pricing import fill_cost
 
+SessionKey = tuple[str, str, str, str]
+AggregateKey = tuple[str, str, str]
+MetricValue = int | float
+
 AGG_FIELDS: list[str] = [
-    "window", "provider", "model", "sessions",
-    "tok_in", "tok_out", "tok_in_delta", "tok_out_delta",
-    "cost_usd", "wall_sec", "api_sec",
-    "diffs_add", "diffs_del",
-    "cost_per_hour", "tok_efficiency", "cost_per_ktok_out",
+    "window",
+    "provider",
+    "model",
+    "sessions",
+    "tok_in",
+    "tok_out",
+    "tok_in_delta",
+    "tok_out_delta",
+    "cost_usd",
+    "wall_sec",
+    "api_sec",
+    "diffs_add",
+    "diffs_del",
+    "cost_per_hour",
+    "tok_efficiency",
+    "cost_per_ktok_out",
 ]
 
 
@@ -45,11 +60,12 @@ def window_key(ts_str: str, window: str) -> str:
 
 
 def aggregate(
-    rows: list[dict[str, str]], window: str,
+    rows: list[dict[str, str]],
+    window: str,
 ) -> list[dict[str, str]]:
     """Group rows by (bucket, provider, model). Cumulative fields use per-session max."""
-    session_max: dict[tuple, dict] = {}
-    session_deltas: dict[tuple, dict] = defaultdict(
+    session_max: dict[SessionKey, dict[str, MetricValue]] = {}
+    session_deltas: dict[SessionKey, dict[str, int]] = defaultdict(
         lambda: {"tok_in_delta": 0, "tok_out_delta": 0, "diffs_add": 0, "diffs_del": 0}
     )
 
@@ -61,8 +77,10 @@ def aggregate(
 
         if key not in session_max or tok_in > session_max[key]["tok_in"]:
             session_max[key] = {
-                "tok_in": tok_in, "tok_out": _int(r, "tokens_out"),
-                "cost": cost, "wall_sec": _float(r, "wall_sec"),
+                "tok_in": tok_in,
+                "tok_out": _int(r, "tokens_out"),
+                "cost": cost,
+                "wall_sec": _float(r, "wall_sec"),
                 "api_sec": _float(r, "api_sec"),
             }
 
@@ -72,12 +90,20 @@ def aggregate(
         dk["diffs_add"] += _int(r, "diffs_add")
         dk["diffs_del"] += _int(r, "diffs_del")
 
-    agg: dict[tuple, dict] = defaultdict(lambda: {
-        "sessions": 0, "tok_in": 0, "tok_out": 0,
-        "tok_in_delta": 0, "tok_out_delta": 0,
-        "cost": 0.0, "wall_sec": 0.0, "api_sec": 0.0,
-        "diffs_add": 0, "diffs_del": 0,
-    })
+    agg: dict[AggregateKey, dict[str, MetricValue]] = defaultdict(
+        lambda: {
+            "sessions": 0,
+            "tok_in": 0,
+            "tok_out": 0,
+            "tok_in_delta": 0,
+            "tok_out_delta": 0,
+            "cost": 0.0,
+            "wall_sec": 0.0,
+            "api_sec": 0.0,
+            "diffs_add": 0,
+            "diffs_del": 0,
+        }
+    )
 
     for (bucket, provider, model, sid), sm in session_max.items():
         ak = (bucket, provider, model)
@@ -97,18 +123,26 @@ def aggregate(
         cph = a["cost"] / (a["wall_sec"] / 3600) if a["wall_sec"] > 0 else 0
         eff = a["tok_out"] / a["tok_in"] if a["tok_in"] > 0 else 0
         cpk = a["cost"] / a["tok_out"] * 1000 if a["tok_out"] > 0 else 0
-        output.append({
-            "window": bucket, "provider": provider, "model": model,
-            "sessions": str(a["sessions"]),
-            "tok_in": str(a["tok_in"]), "tok_out": str(a["tok_out"]),
-            "tok_in_delta": str(a["tok_in_delta"]), "tok_out_delta": str(a["tok_out_delta"]),
-            "cost_usd": f"{a['cost']:.6f}",
-            "wall_sec": f"{a['wall_sec']:.1f}", "api_sec": f"{a['api_sec']:.1f}",
-            "diffs_add": str(a["diffs_add"]), "diffs_del": str(a["diffs_del"]),
-            "cost_per_hour": f"{cph:.4f}",
-            "tok_efficiency": f"{eff:.4f}",
-            "cost_per_ktok_out": f"{cpk:.6f}",
-        })
+        output.append(
+            {
+                "window": bucket,
+                "provider": provider,
+                "model": model,
+                "sessions": str(a["sessions"]),
+                "tok_in": str(a["tok_in"]),
+                "tok_out": str(a["tok_out"]),
+                "tok_in_delta": str(a["tok_in_delta"]),
+                "tok_out_delta": str(a["tok_out_delta"]),
+                "cost_usd": f"{a['cost']:.6f}",
+                "wall_sec": f"{a['wall_sec']:.1f}",
+                "api_sec": f"{a['api_sec']:.1f}",
+                "diffs_add": str(a["diffs_add"]),
+                "diffs_del": str(a["diffs_del"]),
+                "cost_per_hour": f"{cph:.4f}",
+                "tok_efficiency": f"{eff:.4f}",
+                "cost_per_ktok_out": f"{cpk:.6f}",
+            }
+        )
     return output
 
 

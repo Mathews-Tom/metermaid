@@ -29,9 +29,20 @@ def export_csv(rows: list[dict[str, str]], out: Path) -> None:
 def export_json(rows: list[dict[str, str]], out: Path) -> None:
     """Write rows as JSON array with proper numeric types."""
     typed: list[dict[str, str | int | float]] = []
-    int_fields = {"tokens_in", "tokens_out", "cache_read", "cache_write",
-                  "ctx_tokens", "ctx_max", "diff_add", "diff_del",
-                  "tok_in_delta", "tok_out_delta", "sc_tokens_in", "sc_tokens_out"}
+    int_fields = {
+        "tokens_in",
+        "tokens_out",
+        "cache_read",
+        "cache_write",
+        "ctx_tokens",
+        "ctx_max",
+        "diff_add",
+        "diff_del",
+        "tok_in_delta",
+        "tok_out_delta",
+        "sc_tokens_in",
+        "sc_tokens_out",
+    }
     float_fields = {"cost_usd", "sc_cost_usd", "ctx_pct", "wall_sec", "api_sec"}
     for r in rows:
         row: dict[str, str | int | float] = {}
@@ -137,13 +148,13 @@ td {{ padding: 0.5rem 0.6rem; border-bottom: 1px solid #e0e0e0; }}
 tr:hover {{ background: #f5f5fa; }}
 </style></head><body>
 <h1>metermaid Report</h1>
-<p>Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+<p>Generated {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
 <div class="summary">
-<div class="stat"><div class="label">Sessions</div><div class="value">{s['sessions']}</div></div>
-<div class="stat"><div class="label">Tokens In</div><div class="value">{s['tokens_in']:,}</div></div>
-<div class="stat"><div class="label">Tokens Out</div><div class="value">{s['tokens_out']:,}</div></div>
-<div class="stat"><div class="label">Cost</div><div class="value">${s['cost']:.3f}</div></div>
-<div class="stat"><div class="label">Cache Hit</div><div class="value">{s['cache_hit_pct']:.1f}%</div></div>
+<div class="stat"><div class="label">Sessions</div><div class="value">{s["sessions"]}</div></div>
+<div class="stat"><div class="label">Tokens In</div><div class="value">{s["tokens_in"]:,}</div></div>
+<div class="stat"><div class="label">Tokens Out</div><div class="value">{s["tokens_out"]:,}</div></div>
+<div class="stat"><div class="label">Cost</div><div class="value">${s["cost"]:.3f}</div></div>
+<div class="stat"><div class="label">Cache Hit</div><div class="value">{s["cache_hit_pct"]:.1f}%</div></div>
 </div>
 <table>
 <tr><th>Date</th><th>Session</th><th>Provider</th><th>Model</th><th>Tok In</th><th>Tok Out</th><th>Cost</th></tr>
@@ -154,42 +165,52 @@ tr:hover {{ background: #f5f5fa; }}
 
 def export_otlp(rows: list[dict[str, str]], out: Path) -> None:
     """Write OTLP-compatible JSON for Prometheus/Grafana integration."""
-    data_points: list[dict] = []
+    data_points: list[dict[str, object]] = []
     for r in rows:
         attrs = {
             "provider": r.get("provider", ""),
             "model": r.get("model", ""),
             "session_id": r.get("session_id", ""),
         }
-        data_points.append({
-            "timeUnixNano": r.get("timestamp", ""),
-            "attributes": [{"key": k, "value": {"stringValue": v}} for k, v in attrs.items()],
-            "asDouble": _float(r, "cost_usd"),
-            "metrics": {
-                "cost_usd": _float(r, "cost_usd"),
-                "tokens_in": _int(r, "tokens_in"),
-                "tokens_out": _int(r, "tokens_out"),
-                "cache_read": _int(r, "cache_read"),
-                "ctx_pct": _float(r, "ctx_pct"),
-                "wall_sec": _float(r, "wall_sec"),
-            },
-        })
-    otlp = {
-        "resourceMetrics": [{
-            "resource": {
+        data_points.append(
+            {
+                "timeUnixNano": r.get("timestamp", ""),
                 "attributes": [
-                    {"key": "service.name", "value": {"stringValue": "metermaid"}},
+                    {"key": k, "value": {"stringValue": v}} for k, v in attrs.items()
                 ],
-            },
-            "scopeMetrics": [{
-                "scope": {"name": "metermaid.export"},
-                "metrics": [{
-                    "name": "metermaid.session.snapshot",
-                    "description": "Per-session usage snapshot",
-                    "gauge": {"dataPoints": data_points},
-                }],
-            }],
-        }],
+                "asDouble": _float(r, "cost_usd"),
+                "metrics": {
+                    "cost_usd": _float(r, "cost_usd"),
+                    "tokens_in": _int(r, "tokens_in"),
+                    "tokens_out": _int(r, "tokens_out"),
+                    "cache_read": _int(r, "cache_read"),
+                    "ctx_pct": _float(r, "ctx_pct"),
+                    "wall_sec": _float(r, "wall_sec"),
+                },
+            }
+        )
+    otlp = {
+        "resourceMetrics": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": "metermaid"}},
+                    ],
+                },
+                "scopeMetrics": [
+                    {
+                        "scope": {"name": "metermaid.export"},
+                        "metrics": [
+                            {
+                                "name": "metermaid.session.snapshot",
+                                "description": "Per-session usage snapshot",
+                                "gauge": {"dataPoints": data_points},
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
     }
     with open(out, "w") as f:
         json.dump(otlp, f, indent=2)

@@ -15,13 +15,21 @@ def _row(
     **overrides: str,
 ) -> dict[str, str]:
     defaults = {
-        "timestamp": timestamp, "provider": provider, "model": model,
+        "timestamp": timestamp,
+        "provider": provider,
+        "model": model,
         "session_id": session_id,
-        "tokens_in": str(tokens_in), "tokens_out": str(tokens_out),
-        "tok_in_delta": "100", "tok_out_delta": "50",
-        "cost_usd": "0.1", "wall_sec": "60.0", "api_sec": "10.0",
-        "cache_read": "0", "cache_write": "0",
-        "diff_add": "5", "diff_del": "2",
+        "tokens_in": str(tokens_in),
+        "tokens_out": str(tokens_out),
+        "tok_in_delta": "100",
+        "tok_out_delta": "50",
+        "cost_usd": "0.1",
+        "wall_sec": "60.0",
+        "api_sec": "10.0",
+        "cache_read": "0",
+        "cache_write": "0",
+        "diff_add": "5",
+        "diff_del": "2",
     }
     defaults.update(overrides)
     return defaults

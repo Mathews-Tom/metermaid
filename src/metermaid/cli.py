@@ -16,7 +16,7 @@ from .compare import provider_comparison
 from .consolidate import aggregate, write_aggregate_csv
 from .csv_io import read_all_snapshots
 from .hook import handle_claude_hook
-from .models import METERMAID_HOME, DEFAULT_INTERVAL, PID_FILE, SESSIONS_DIR
+from .models import DEFAULT_INTERVAL, METERMAID_HOME, PID_FILE, SESSIONS_DIR
 from .platform import discover_sessions, is_wsl, pid_alive
 from .report import filter_rows, report, session_table
 from .watcher import SessionWatcher
@@ -30,7 +30,8 @@ def _cmd_watch(args: argparse.Namespace) -> None:
 
 def _cmd_stop(args: argparse.Namespace) -> None:
     if not PID_FILE.exists():
-        console.print("[yellow]No watcher running[/yellow]"); return
+        console.print("[yellow]No watcher running[/yellow]")
+        return
     pid = int(PID_FILE.read_text().strip())
     try:
         os.kill(pid, signal.SIGTERM)
@@ -42,6 +43,7 @@ def _cmd_stop(args: argparse.Namespace) -> None:
 
 def _cmd_status(args: argparse.Namespace) -> None:
     import platform as _platform
+
     if PID_FILE.exists():
         pid = int(PID_FILE.read_text().strip())
         if pid_alive(pid):
@@ -52,10 +54,13 @@ def _cmd_status(args: argparse.Namespace) -> None:
         console.print("Watcher: [dim]not running[/dim]")
 
     from rich.table import Table
+
     claude, codex = discover_sessions(max_age_hours=1)
     t = Table(title="Active sessions (last 1h)", box=None)
-    t.add_column("Session", style="cyan"); t.add_column("Provider")
-    t.add_column("Age"); t.add_column("Project", style="dim")
+    t.add_column("Session", style="cyan")
+    t.add_column("Provider")
+    t.add_column("Age")
+    t.add_column("Project", style="dim")
     for s in claude[:10]:
         age = (time.time() - s.stat().st_mtime) / 60
         t.add_row(s.stem[:12], "claude", f"{age:.0f}m ago", s.parent.name[:25])
@@ -81,8 +86,15 @@ def _cmd_report(args: argparse.Namespace) -> None:
     filtered = filter_rows(
         all_rows, window=args.window, session=args.session, provider=args.provider
     )
-    parts = [x for x in [args.window, args.provider,
-             f"session {args.session}" if args.session else None] if x]
+    parts = [
+        x
+        for x in [
+            args.window,
+            args.provider,
+            f"session {args.session}" if args.session else None,
+        ]
+        if x
+    ]
     console.rule(f"metermaid ({' | '.join(parts) or 'all time'})")
     report(filtered, all_rows)
     session_table(filtered)
@@ -90,6 +102,7 @@ def _cmd_report(args: argparse.Namespace) -> None:
 
 def _cmd_export(args: argparse.Namespace) -> None:
     from .export import export_dispatch
+
     rows = read_all_snapshots(args.data_dir)
     filtered = filter_rows(
         rows, window=args.window, session=args.session, provider=args.provider
@@ -102,8 +115,10 @@ def _cmd_export(args: argparse.Namespace) -> None:
 
 def _cmd_backfill(args: argparse.Namespace) -> None:
     r = backfill(
-        sessions_dir=args.data_dir, since_hours=args.since or 0,
-        dry_run=args.dry_run, force=args.force,
+        sessions_dir=args.data_dir,
+        since_hours=args.since or 0,
+        dry_run=args.dry_run,
+        force=args.force,
     )
     mode = " [dim](dry run)[/dim]" if args.dry_run else ""
     console.print(
@@ -119,7 +134,8 @@ def _cmd_consolidate(args: argparse.Namespace) -> None:
     if args.since:
         rows = [r for r in rows if r.get("timestamp", "") >= args.since]
     if not rows:
-        console.print("[yellow]No data found.[/yellow]"); return
+        console.print("[yellow]No data found.[/yellow]")
+        return
     agg = aggregate(rows, args.window)
     if args.summary:
         provider_comparison(agg)
@@ -133,6 +149,7 @@ def _cmd_consolidate(args: argparse.Namespace) -> None:
 
 def _cmd_migrate(args: argparse.Namespace) -> None:
     import shutil
+
     old = Path.home() / ".codetrack"
     new = METERMAID_HOME
     if not old.exists():
@@ -148,17 +165,21 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
         if src.exists():
             shutil.copytree(src, new / sub, dirs_exist_ok=True)
             copied += len(list(src.iterdir()))
-    console.print(f"[green]Migrated[/green] {copied} files from ~/.codetrack -> ~/.metermaid")
+    console.print(
+        f"[green]Migrated[/green] {copied} files from ~/.codetrack -> ~/.metermaid"
+    )
 
 
 def _cmd_mcp(args: argparse.Namespace) -> None:
     from .mcp import serve
+
     serve(args.data_dir)
 
 
 def _cmd_heatmap(args: argparse.Namespace) -> None:
     from .csv_io import read_all_snapshots as _read
     from .heatmap import daily_activity, render_heatmap
+
     rows = _read(args.data_dir)
     activity = daily_activity(rows, days=args.days, metric=args.metric)
     render_heatmap(activity, metric=args.metric, days=args.days)
@@ -199,11 +220,15 @@ def main() -> None:
 
     for name, func in [("report", _cmd_report), ("export", _cmd_export)]:
         s = sub.add_parser(name)
-        s.add_argument("--window"); s.add_argument("--session")
+        s.add_argument("--window")
+        s.add_argument("--session")
         s.add_argument("--provider", choices=["claude", "codex"])
         if name == "export":
-            s.add_argument("--format",
-                           choices=["csv", "json", "markdown", "html", "otlp"], default="csv")
+            s.add_argument(
+                "--format",
+                choices=["csv", "json", "markdown", "html", "otlp"],
+                default="csv",
+            )
             s.add_argument("--out", default="metermaid_export.csv")
         s.set_defaults(func=func)
 
