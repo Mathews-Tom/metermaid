@@ -18,6 +18,7 @@ from .consolidate import aggregate, write_aggregate_csv
 from .csv_io import read_all_snapshots
 from .discover import PILOT_AGENTS
 from .doctor import DoctorReport, build_doctor_report
+from .export_v1 import build_export, export_preview, write_export
 from .hook import handle_claude_hook
 from .ingest import IngestSummary, ingest_once
 from .models import DEFAULT_INTERVAL, METERMAID_HOME, PID_FILE, SESSIONS_DIR
@@ -279,6 +280,15 @@ def _cmd_export(args: argparse.Namespace) -> None:
     console.print(f"Exported [bold]{len(filtered)}[/bold] rows ({fmt}) -> {out}")
 
 
+def _cmd_export_aggregate(args: argparse.Namespace) -> None:
+    store, _secret = _open_v1_store(args)
+    document = build_export(store.events())
+    console.print(export_preview(document))
+    out = Path(args.out)
+    write_export(document, out)
+    console.print(f"Exported [bold]{len(document.rows)}[/bold] rows -> {out}")
+
+
 def _cmd_backfill(args: argparse.Namespace) -> None:
     r = backfill(
         sessions_dir=args.data_dir,
@@ -416,6 +426,11 @@ def main() -> None:
     )
     exp.add_argument("--out", default="metermaid_export.csv")
     exp.set_defaults(func=_cmd_export)
+
+    expagg = sub.add_parser("export-aggregate")
+    expagg.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    expagg.add_argument("--out", default="metermaid_aggregate_export.json")
+    expagg.set_defaults(func=_cmd_export_aggregate)
 
     sub.add_parser("mcp").set_defaults(func=_cmd_mcp)
 
