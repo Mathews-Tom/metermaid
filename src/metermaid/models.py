@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from datetime import datetime
 from pathlib import Path
 
 METERMAID_HOME: Path = Path.home() / ".metermaid"
 SESSIONS_DIR: Path = METERMAID_HOME / "sessions"
-STATE_DIR: Path = METERMAID_HOME / "state"
-PID_FILE: Path = METERMAID_HOME / "metermaid.pid"
 DEFAULT_INTERVAL: int = 10
 
 
@@ -42,15 +39,3 @@ class Snapshot:
 
 
 CSV_HEADERS: list[str] = [f.name for f in fields(Snapshot)]
-
-
-def ts_delta(first: str, last: str) -> float:
-    """Seconds between two ISO timestamps. Returns 0 on any failure."""
-    if not first or not last:
-        return 0.0
-    try:
-        t0 = datetime.fromisoformat(first.replace("Z", "+00:00"))
-        t1 = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        return max(0, (t1 - t0).total_seconds())
-    except (ValueError, TypeError):
-        return 0.0

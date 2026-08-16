@@ -292,37 +292,3 @@ def test_subcommand_level_data_dir_overrides_an_explicit_top_level_one(
     sub_store.initialize()
     assert len(sub_store.events()) == 1
     assert not top_level_dir.exists()
-
-
-def test_stop_command_never_signals_a_pid_only_clears_a_stale_pid_file(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    stale_pid_file = tmp_path / "metermaid.pid"
-    stale_pid_file.write_text("999999999")
-    monkeypatch.setattr("metermaid.cli.PID_FILE", stale_pid_file)
-    monkeypatch.setattr("sys.argv", ["metermaid", "stop"])
-
-    def _forbidden_kill(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("stop must never signal a PID")
-
-    monkeypatch.setattr("os.kill", _forbidden_kill)
-
-    main()
-
-    assert not stale_pid_file.exists()
-    out = capsys.readouterr().out
-    assert "foreground" in out
-
-
-def test_stop_command_prints_foreground_guidance_with_no_pid_file(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    absent_pid_file = tmp_path / "no-such-metermaid.pid"
-    monkeypatch.setattr("metermaid.cli.PID_FILE", absent_pid_file)
-    monkeypatch.setattr("sys.argv", ["metermaid", "stop"])
-
-    main()
-
-    out = capsys.readouterr().out
-    assert "foreground" in out
-    assert "Removed" not in out
