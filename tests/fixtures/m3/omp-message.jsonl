@@ -1,0 +1,1 @@
+{"type":"message","timestamp":"2026-08-16T00:00:00Z","message":{"role":"assistant","model":"fixture-model","timestamp":1786838400000,"toolName":"read","usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":5,"cost":{"input":0.01,"output":0.02,"cacheRead":0.001,"cacheWrite":0.001,"total":0.032}}}}

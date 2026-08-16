@@ -1,0 +1,1 @@
+{"type":"assistant","timestamp":"2026-08-16T00:00:00Z","sessionId":"fixture-session","cwd":"<redacted>","gitBranch":"<redacted>","isSidechain":false,"message":{"role":"assistant","model":"fixture-model","usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":10,"cache_creation_input_tokens":5,"output_tokens_details":{"thinking_tokens":3}}}}
