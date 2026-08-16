@@ -2,7 +2,7 @@
 
 **Repo:** `github.com/Mathews-Tom/metermaid`
 **Document date:** 2026-08-16
-**Companion:** [system overview](system-overview.md)
+**Companion:** [system overview](overview.md)
 
 > **Status: deferred design reference.** This document is not the approved v1 implementation scope or a statement of shipped behavior. Its rate-limit, stall, classifier, TUI, PATH-guard, OpenTelemetry ingest, local-model, privacy-safe event store/export, and offline-enforcement proposals require their stated evidence gates before promotion.
 

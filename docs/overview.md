@@ -4,7 +4,7 @@
 **Status:** Design expansion of an existing tracker (formerly `codetrack`)
 **Document date:** 2026-08-16
 **Audience:** Engineering leadership, prospective contributors, internal pilot participants
-**Companion:** [system design](system-design.md)
+**Companion:** [system design](design.md)
 
 > **Status: deferred design reference.** This document records promotion candidates beyond the approved v1 personal pilot. It is neither a shipped-capability inventory nor an implementation authority. Rate-limit reconstruction, throttle/stall claims, task classification, TUI, PATH guard, OpenTelemetry ingest, local-model features, the privacy-safe event store/export redesign, and offline enforcement remain unapproved until their explicit evidence gates pass.
 
