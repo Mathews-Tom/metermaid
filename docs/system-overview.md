@@ -6,7 +6,7 @@
 **Audience:** Engineering leadership, prospective contributors, internal pilot participants
 **Companion:** [system design](system-design.md)
 
-> **Status: deferred design reference.** This document records promotion candidates beyond the approved v1 personal pilot. It is neither a shipped-capability inventory nor an implementation authority. Rate-limit reconstruction, throttle/stall claims, task classification, TUI, PATH guard, OpenTelemetry ingest, and local-model features remain unapproved until their explicit evidence gates pass.
+> **Status: deferred design reference.** This document records promotion candidates beyond the approved v1 personal pilot. It is neither a shipped-capability inventory nor an implementation authority. Rate-limit reconstruction, throttle/stall claims, task classification, TUI, PATH guard, OpenTelemetry ingest, local-model features, the privacy-safe event store/export redesign, and offline enforcement remain unapproved until their explicit evidence gates pass.
 
 ---
 
@@ -30,7 +30,7 @@ Concretely it answers four questions no existing tool answers together:
 
 - Not an admin dashboard. There is no server, no org view, no manager rollup by default.
 - Not a cost tool by ambition. The current v0.2 runtime captures `costUSD` when the source reports it and otherwise uses its default pricing-table estimate. The target state narrows this to captured-only cost.
-- Not a productivity scorer. It never produces a per-developer "efficiency" number, and the export schema is deliberately incapable of supporting one.
+- Not a productivity scorer. The target export schema is deliberately incapable of producing a per-developer "efficiency" number; current v0.2 CSV and JSON exports still carry the fields from which one could be derived.
 
 ---
 
@@ -121,7 +121,7 @@ schema-restricted JSON document only when the developer runs it.
 | Surface | Trigger | Job |
 |---|---|---|
 | `metermaid watch` | Background service | Tail transcripts, populate store |
-| statusline hook | Agent render loop | Capture the vendor's own budget gauge |
+| statusline hook | Agent render loop | Capture the vendor's context-window and cost figures; quota numerator/denominator and reset data remain unverified |
 | `metermaid guard` | PATH shim on `claude`/`codex`/`gemini` | Pre-flight budget line; one-key stall question |
 | `metermaid` / `report` / `export` / `advise` | User-invoked | Analysis, export, recommendation |
 | `metermaid mcp` | Stdio MCP client | Expose usage summaries, session lists, and cost-window reads |

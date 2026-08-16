@@ -4,7 +4,7 @@
 **Document date:** 2026-08-16
 **Companion:** [system overview](system-overview.md)
 
-> **Status: deferred design reference.** This document is not the approved v1 implementation scope or a statement of shipped behavior. Its rate-limit, stall, classifier, TUI, PATH-guard, OpenTelemetry ingest, and local-model proposals require their stated evidence gates before promotion.
+> **Status: deferred design reference.** This document is not the approved v1 implementation scope or a statement of shipped behavior. Its rate-limit, stall, classifier, TUI, PATH-guard, OpenTelemetry ingest, local-model, privacy-safe event store/export, and offline-enforcement proposals require their stated evidence gates before promotion.
 
 ---
 
@@ -463,6 +463,8 @@ remaining budget, and make silence the default.
 
 Both properties are claims a security review will test. Assertion in a README is not
 enforcement.
+
+**Current v0.2 caveat:** CSV snapshots and generic CSV/JSON exports persist raw project paths and second-resolution timestamps. The guarantees below describe the deferred v1 store and export boundary, not current behavior.
 
 ### 10.1 Privacy by construction
 
