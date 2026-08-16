@@ -212,6 +212,7 @@ __marimo__/
 # metermaid
 .metermaid/
 *.csv
+!tests/fixtures/m4/*.csv
 
 # Agentic Systems
 .agent
