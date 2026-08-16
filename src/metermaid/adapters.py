@@ -16,6 +16,7 @@ passing contract test.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -28,21 +29,63 @@ CompleteRecord = Mapping[str, object]
 AdapterOutcome = NormalizedEvent | ParseOutcome
 """A mapped event, or a countable diagnostic for an unsupported/malformed record."""
 
+_OPAQUE_IDENTIFIER = re.compile(r"[0-9a-f]{64}\Z")
+"""The same opaque-identifier shape ``domain.py`` requires of every
+``NormalizedEvent`` identifier field, enforced here too so an invalid
+``RecordContext`` fails at construction rather than surfacing later as
+a misleading per-record parse diagnostic."""
+
+
+def _require_opaque_identifier(name: str, value: str) -> None:
+    if _OPAQUE_IDENTIFIER.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a 64-character lowercase hex identifier")
+
 
 @dataclass(frozen=True, slots=True)
 class RecordContext:
     """Opaque per-file identity the ingestion service derives and supplies.
 
-    Neither field is derivable from a single record on its own: no
-    reviewed fixture carries a project identifier, and only Claude
-    Code's record shape carries an in-record session identifier. The
-    ingestion service resolves both from the source file it is reading
-    and passes them here already opaque, so an adapter can stay pure
-    and never needs its own file, path, or project-name access.
+    Neither ``source_session_id`` nor ``project_key`` is derivable from
+    a single record on its own: no reviewed fixture carries a project
+    identifier, and only Claude Code's record shape carries an
+    in-record session identifier. The ingestion service resolves both
+    from the source file it is reading and passes them here already
+    opaque, so an adapter can stay pure and never needs its own file,
+    path, or project-name access.
+
+    ``byte_start`` is the record's absolute byte offset within its
+    source file — the same coordinate the ingestion service's own
+    incremental byte-offset/watermark reader already tracks to resume
+    a file, reused here rather than introducing a second, separate
+    per-file counter. No reviewed fixture proves a native, agent-issued
+    per-record identifier, so an adapter cannot derive a stable event
+    identity from record content plus timestamp alone — two distinct
+    records can legitimately share the same discriminator, session,
+    and even the same recorded timestamp. ``byte_start`` is the
+    identity material that keeps their derived ``event_id``s distinct;
+    it carries no meaning outside identity derivation and is never a
+    database primary key. It is required, not defaulted: a caller must
+    always supply the real offset it read the record from.
+
+    ``source_session_id`` and ``project_key`` are validated as opaque
+    64-character lowercase hex identifiers at construction — the same
+    format ``NormalizedEvent`` itself requires. Failing loud here, at
+    the boundary where the ingestion service hands identity to an
+    adapter, turns a caller bug (an unhashed session ID, a truncated
+    key) into an immediate, attributable error instead of a record
+    later being misreported as an unrelated ``malformed`` parse
+    diagnostic.
     """
 
     source_session_id: str
     project_key: str
+    byte_start: int
+
+    def __post_init__(self) -> None:
+        _require_opaque_identifier("source_session_id", self.source_session_id)
+        _require_opaque_identifier("project_key", self.project_key)
+        if self.byte_start < 0:
+            raise ValueError("byte_start cannot be negative")
 
 
 @runtime_checkable
