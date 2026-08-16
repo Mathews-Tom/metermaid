@@ -1,124 +1,140 @@
 # metermaid
 
-Background usage tracker for Claude Code and Codex CLI sessions.
+Background usage tracker for Claude Code, Codex CLI, Pi, and OMP sessions.
 
-Polls active session directories, extracts token usage, context window state, cost data, and timing from JSONL transcripts, then writes deduplicated snapshots to per-session CSV files. One file per session — no shared read-modify-write, safe across multiple terminals/tabs/windows. Works on macOS, Linux, Windows, and WSL.
+Polls documented session directories, incrementally reads new JSONL records, and normalizes each one into a text-free usage event stored in a local SQLite database. No prompt, tool argument, raw session identifier, or source file path is ever persisted, exported, or printed — every identifier is an opaque HMAC digest derived from a machine-local secret. Runs on macOS, Linux, and WSL; the watcher also scans the Windows-side home under WSL.
+
+This is a personal dogfood pilot, not a published package: install it from a source checkout.
 
 ## Install
 
 ```bash
-uv tool install metermaid-cli
+git clone https://github.com/Mathews-Tom/metermaid.git
+cd metermaid
+uv tool install .
 ```
 
-Or from source:
+Or run it without installing, from inside the checkout:
 
 ```bash
-uv tool install -e .
+uv run metermaid ingest
 ```
 
-Requires Python 3.11+. Single dependency: `rich`.
+Or build and install the wheel directly (what the clean-install smoke test in `tests/test_install_smoke.py` exercises):
+
+```bash
+uv build --wheel
+uv tool install dist/metermaid_cli-*.whl
+```
+
+Requires Python 3.11+. Single runtime dependency: `rich`.
 
 ## Quick start
 
 ```bash
-# Import session activity from disk
+# Import session activity observed since the store was created
 metermaid ingest
 
-# Start watching for new activity
+# Keep importing in the foreground (Ctrl+C to stop)
 metermaid watch
 
 # See what's happening
 metermaid status
+metermaid doctor
 metermaid report
 ```
 
-## Usage
+## Commands
 
-### Watch
+`metermaid` supports exactly seven subcommands. Every subcommand accepts `--data-dir PATH` to point at an alternate state root (see [Storage](#storage)); `--data-dir` may also be given once before the subcommand.
 
-Polls Claude Code and Codex CLI session directories for changes. Both providers are tracked automatically — no configuration needed.
-
-```bash
-metermaid watch                  # foreground (Ctrl+C to stop)
-metermaid watch --interval 5     # custom poll interval (seconds)
-metermaid status                 # store + discovery summary
-```
-
-### Report
-
-Shows session summary with sparkline trends, cache hit rate, cost-per-line, week-over-week comparison, cost windows, budget gauge (if configured), and actionable nudges.
-
-```bash
-metermaid report                 # all time
-metermaid report --window 7d     # last 7 days
-metermaid report --window 5h     # last 5 hours
-metermaid report --provider claude
-metermaid report --session abc123
-```
-
-Report includes:
-
-- Token and cost totals with 7-day Unicode sparkline trends (`▁▂▃▄▅▆▇█`)
-- Cache hit rate color-coded by threshold (green >70%, yellow 40–70%, red <40%)
-- Cost per line changed (`total_cost / lines_changed`)
-- Week-over-week comparison with delta arrows
-- Cost windows (5h / 7d / 30d)
-- Budget gauge and end-of-month forecast (when configured)
-- Actionable nudges: cache hit drops, cost spikes, context pressure warnings
-
-### Export
-
-Export an aggregated, privacy-safe usage summary (grouped by agent) as JSON. Prints the field list and a sample row before writing.
-
-```bash
-metermaid export                    # writes metermaid_export.json
-metermaid export --out usage.json   # custom output path
-```
+| Command | Flags | Does |
+| --- | --- | --- |
+| `ingest` | `--data-dir` | Runs one incremental ingest pass over every documented source and exits. |
+| `watch` | `--data-dir`, `--interval` (seconds, default `10`) | Runs `ingest` in a foreground loop until interrupted with Ctrl+C. |
+| `status` | `--data-dir` | Prints aggregate event/session/diagnostic counts plus the source-discovery table. |
+| `doctor` | `--data-dir` | Prints the source-discovery table plus per-agent, per-discriminator parse-outcome counts (`parsed` / `malformed` / `unsupported`). |
+| `report` | `--data-dir`, `--since`, `--until` (ISO-8601), `--agent`, `--model`, `--project-key` | Prints observed-event totals and by-agent/by-model/by-project-key breakdowns, plus imported legacy history in its own section. |
+| `export` | `--data-dir`, `--out` (default `metermaid_export.json`) | Writes the restricted aggregate JSON export; prints the field list and one sample row before writing. |
+| `import-legacy` | `--data-dir`, optional positional `LEGACY_DIR` (default `~/.metermaid/sessions`) | Explicitly imports v0.2 CSV history — see [Legacy v0.2 import](#legacy-v02-import). |
 
 ## Session discovery
 
-Auto-discovers sessions with no configuration:
+`doctor`/`status` report discovery for four pilot agents. A root existing on disk is only a filesystem fact; an agent is `enabled` only when it also has a registered, fixture-backed adapter — currently all four.
 
-| Provider             | Paths scanned                                                 |
-| -------------------- | ------------------------------------------------------------- |
-| Claude Code          | `~/.config/claude/projects/<hash>/<session>.jsonl` (v1.0.30+) |
-| Claude Code (legacy) | `~/.claude/projects/<hash>/<session>.jsonl`                   |
-| Codex CLI            | `~/.codex/sessions/` (or `$CODEX_HOME/sessions/`)             |
-| WSL                  | All of the above under `/mnt/c/Users/<name>/`                 |
+| Agent | Roots scanned |
+| --- | --- |
+| Claude Code | `<home>/.config/claude/projects/**/*.jsonl` (current) and `<home>/.claude/projects/**/*.jsonl` (legacy) |
+| Codex CLI | `$CODEX_HOME/sessions/**/rollout-*.jsonl` (if `CODEX_HOME` is set) and `<home>/.codex/sessions/**/rollout-*.jsonl` |
+| Pi | `<home>/.pi/agent/sessions/**/*.jsonl` |
+| OMP | `<home>/.omp/agent/sessions/**/*.jsonl` |
+
+Every `<home>` is scanned once per detected home directory: the native home, plus the Windows-side home under WSL.
 
 ## Data captured
 
-Each snapshot records:
+Each normalized event may carry:
 
-| Field                              | Source                                     |
-| ---------------------------------- | ------------------------------------------ |
-| `tokens_in`, `tokens_out`          | Cumulative input/output tokens             |
-| `cache_read`, `cache_write`        | Prompt cache usage                         |
-| `cost_usd`                         | `costUSD` from transcript (Claude Code)    |
-| `ctx_pct`, `ctx_tokens`, `ctx_max` | Context window utilization                 |
-| `wall_sec`                         | Wall clock time (first to last timestamp)  |
-| `api_sec`                          | API latency (statusLine hook only)         |
-| `diff_add`, `diff_del`             | Lines added/removed (statusLine hook only) |
-| `model`, `provider`, `session_id`  | Session identification                     |
+| Field | Meaning |
+| --- | --- |
+| `agent` | One of `claude-code`, `codex`, `pi`, `omp`. |
+| `model` | Model label, when the source record carries one; otherwise unavailable. |
+| `tokens_in`, `tokens_out` | Per-record input/output token counts, when present. |
+| `cache_read`, `cache_write` | Prompt-cache token counts, when present. |
+| `reasoning_tokens` | Reasoning-token count, when the source reports one. |
+| `provider_cost_usd` | Provider-reported cost, when present. |
+| `source_session_id`, `project_key` | Opaque HMAC digests — never the raw session id or path. |
+| `occurred_at` | The record's own timestamp, normalized to UTC. |
+
+A missing counter is reported as `unavailable`, never invented as zero. Metermaid does not track context-window percentage, wall-clock or API latency, diff line counts, raw file paths, prompts, or tool arguments — only the counters above.
 
 ## Storage
 
-Per-session CSV files at `~/.metermaid/sessions/{provider}_{session_id}.csv`. Each file is append-only, written by exactly one process. Reports scan all session files and merge on read.
+Default state root: `~/.metermaid/` (override with `--data-dir`):
 
 ```
 ~/.metermaid/
-  sessions/
-    claude_a1b2c3d4e5f6.csv
-    codex_session1234.csv
-  state/
-    claude_a1b2c3d4e5f6.state
-  config.toml
-  metermaid.pid
-  metermaid.log
+  metermaid.sqlite3   # normalized events, watermarks, diagnostics, imported legacy rows
+  metermaid.secret    # machine-local HMAC secret (0600), created on first run
 ```
 
-## How it works
+`metermaid.secret` derives every opaque identifier the database stores; nothing here is ever a raw path, prompt, or session id. Reports and exports read only from this local database — no network calls, no shared state across machines.
 
-- **Filesystem polling**: Scans session directories every 10 seconds (configurable). No filesystem watchers or inotify — pure polling for maximum portability, including WSL where inotify doesn't work on Windows-side paths.
-- **Deduplication**: Two-layer dedup — mtime check skips unchanged files, content hash (provider + session + token counts) prevents duplicate snapshots when data hasn't changed between polls.
-- **Per-session isolation**: No shared read-modify-write. Multiple watchers across terminals are safe because each session maps to exactly one file.
+## Legacy v0.2 import
+
+An older v0.2 install may have left per-session CSV files at `~/.metermaid/sessions/*.csv`. Metermaid v1 never reads them automatically — `ingest`/`watch` only ever produce normalized events from live sources. Importing legacy history is always explicit:
+
+```bash
+metermaid import-legacy                    # reads ~/.metermaid/sessions
+metermaid import-legacy /path/to/csvs      # or an explicit directory
+```
+
+The importer is read-only and narrow:
+
+- Only a CSV whose header exactly matches the original v0.2 header is imported; any other header skips the whole file.
+- Only eight columns are read: `timestamp`, `provider`, `model`, `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `cost_usd`. Raw path, session id, deltas, sidechain fields, and context/timing columns are never read.
+- A file with any malformed numeric cell is rejected in full — no partial import.
+- Imports are idempotent: re-running over the same files never duplicates rows.
+- Imported rows are stored and reported as `LegacySnapshot` history, entirely separate from current observed events — `report` never merges legacy totals into the observed totals.
+- The source CSV files are opened read-only and are never modified, moved, or deleted.
+
+## Uninstall and data retention
+
+```bash
+uv tool uninstall metermaid-cli
+```
+
+removes the installed CLI only. It never touches `~/.metermaid`. To remove all local data as well:
+
+```bash
+rm -rf ~/.metermaid
+```
+
+(or your `--data-dir`, if you used one).
+
+## Development
+
+```bash
+uv sync --all-groups --locked --python 3.11
+uv run ruff check . && uv run ruff format --check . && uv run mypy src tests && uv run pytest
+```
