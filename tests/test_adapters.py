@@ -109,7 +109,9 @@ def test_a_protocol_conforming_probe_can_satisfy_purity_without_forbidden_calls(
     monkeypatch.setattr(os, "stat", _forbidden)
 
     probe = _ProtocolProbe(agent="pi")
-    context = RecordContext(source_session_id="s" * 64, project_key="p" * 64)
+    context = RecordContext(
+        source_session_id="a" * 64, project_key="b" * 64, byte_start=0
+    )
     outcome = probe.parse({"type": "message"}, context=context, secret=_SECRET)
 
     assert isinstance(outcome, ParseOutcome)
