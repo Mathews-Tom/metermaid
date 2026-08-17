@@ -33,7 +33,7 @@ from metermaid.state import (
     opaque_identifier,
     resolve_state_paths,
 )
-from metermaid.store import EventStore
+from metermaid.store import SCHEMA_VERSION, EventStore
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "m4"
 SUPPORTED_FIXTURE = "legacy-supported.csv"
@@ -359,10 +359,10 @@ def test_legacy_history_report_groups_by_provider_without_touching_events(
     assert report.by_provider[0].totals.cost_usd == pytest.approx(0.032)
 
 
-# --- store schema: v2 gives legacy_snapshots its mapped columns -------------
+# --- store schema: legacy mappings survive later schema upgrades ------------
 
 
-def test_store_schema_v2_gives_legacy_snapshots_its_mapped_columns(
+def test_store_schema_keeps_legacy_snapshots_mapped_through_current_version(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "metermaid.sqlite3"
@@ -371,7 +371,7 @@ def test_store_schema_v2_gives_legacy_snapshots_its_mapped_columns(
     store.initialize()
 
     with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(legacy_snapshots)")
         }
@@ -391,7 +391,7 @@ def test_store_schema_v2_gives_legacy_snapshots_its_mapped_columns(
     }
 
 
-def test_a_store_already_at_v1_upgrades_cleanly_to_v2_on_next_initialize(
+def test_a_store_already_at_v1_upgrades_cleanly_to_current_version(
     tmp_path: Path,
 ) -> None:
     """A pre-M4 install whose ``legacy_snapshots`` was only the empty
@@ -409,7 +409,7 @@ def test_a_store_already_at_v1_upgrades_cleanly_to_v2_on_next_initialize(
     store.initialize()
 
     with sqlite3.connect(database) as verify:
-        assert verify.execute("PRAGMA user_version").fetchone() == (2,)
+        assert verify.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         columns = {
             row[1] for row in verify.execute("PRAGMA table_info(legacy_snapshots)")
         }

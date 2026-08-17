@@ -8,7 +8,9 @@ from pytest import MonkeyPatch
 
 import metermaid.ingest as ingest_module
 from metermaid.discover import SourceRoot
-from metermaid.ingest import discover_candidate_files, ingest_once
+from metermaid.domain import ParseOutcome
+from metermaid.ingest import discover_candidate_files, ingest_once, read_increment
+from metermaid.parsers import ClaudeCodeAdapter
 from metermaid.state import (
     load_or_create_secret,
     opaque_identifier,
@@ -42,6 +44,12 @@ _OMP_RECORD = (
     b'{"role":"assistant","model":"fixture-model","toolName":"read",'
     b'"usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":5,'
     b'"cost":{"total":0.032}}}}\n'
+)
+
+_CLAUDE_NULL_THINKING_RECORD = (
+    b'{"type":"assistant","timestamp":"2026-08-16T00:00:00Z","message":'
+    b'{"usage":{"input_tokens":100,"output_tokens":20,'
+    b'"output_tokens_details":null}}}\n'
 )
 
 
@@ -154,6 +162,163 @@ def test_an_incomplete_final_line_yields_no_event_until_it_is_completed(
 
     assert completed_summary.events_inserted == 1
     assert len(store.events()) == 1
+
+
+def test_adapter_revision_recovery_restores_events_without_duplicate_diagnostics(
+    tmp_path: Path,
+) -> None:
+    store, secret = _store(tmp_path)
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir()
+    session = claude_dir / "session-1.jsonl"
+    session.write_bytes(_CLAUDE_NULL_THINKING_RECORD)
+    roots = (_root("claude-code", claude_dir),)
+    locator = opaque_identifier(secret, "source-locator", str(session))
+    prior = read_increment(session, None, locator, secret, adapter_revision=1).watermark
+    malformed = ParseOutcome(
+        agent="claude-code", discriminator="assistant", kind="malformed"
+    )
+    store.commit_ingest([], [malformed], prior)
+    with session.open("ab") as handle:
+        handle.write(b"not-json\n")
+
+    recovered = ingest_once(store, secret, roots=roots)
+    repeated = ingest_once(store, secret, roots=roots)
+
+    assert recovered.events_inserted == 1
+    assert recovered.diagnostics_recorded == 1
+    assert repeated.events_inserted == 0
+    assert repeated.diagnostics_recorded == 0
+    assert len(store.events()) == 1
+    assert store.diagnostics() == [
+        malformed,
+        ParseOutcome(
+            agent="claude-code", discriminator="invalid-json", kind="malformed"
+        ),
+    ]
+    watermark = store.watermark(locator)
+    assert watermark is not None
+    assert watermark.adapter_revision == 2
+
+
+def test_bounded_semantic_replay_never_recounts_prior_diagnostics(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    store, secret = _store(tmp_path)
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir()
+    session = claude_dir / "session-1.jsonl"
+    prefix = b'{"type":"unrecognized","padding":"'
+    suffix = b'"}\n'
+    unrecognized = (
+        prefix
+        + b"x" * (len(_CLAUDE_NULL_THINKING_RECORD) - len(prefix) - len(suffix))
+        + suffix
+    )
+    assert len(unrecognized) == len(_CLAUDE_NULL_THINKING_RECORD)
+    session.write_bytes(_CLAUDE_NULL_THINKING_RECORD + unrecognized * 4)
+    roots = (_root("claude-code", claude_dir),)
+    current_adapter = ClaudeCodeAdapter()
+    monkeypatch.setitem(
+        ingest_module._ADAPTERS,
+        "claude-code",
+        ClaudeCodeAdapter(adapter_revision=1),
+    )
+    baseline = ingest_once(store, secret, roots=roots)
+    assert baseline.diagnostics_recorded == 4
+    monkeypatch.setitem(ingest_module._ADAPTERS, "claude-code", current_adapter)
+    monkeypatch.setattr(
+        ingest_module, "_MAX_READ_BYTES", len(_CLAUDE_NULL_THINKING_RECORD)
+    )
+
+    summaries = [ingest_once(store, secret, roots=roots) for _ in range(5)]
+
+    assert [summary.diagnostics_recorded for summary in summaries] == [0, 0, 0, 0, 0]
+    assert sum(summary.events_inserted for summary in summaries) == 0
+    assert store.diagnostics() == [
+        ParseOutcome(
+            agent="claude-code",
+            discriminator="unrecognized",
+            kind="unsupported",
+            count=4,
+        )
+    ]
+
+
+def test_bounded_replay_records_rewritten_records_after_completed_prefix(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    store, secret = _store(tmp_path)
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir()
+    session = claude_dir / "session-1.jsonl"
+    original = b'{"type":"unrecognized","padding":"xxxxxxxx"}\n'
+    replacement = b"x" * (len(original) - 1) + b"\n"
+    session.write_bytes(original * 5)
+    roots = (_root("claude-code", claude_dir),)
+    current_adapter = ClaudeCodeAdapter()
+    monkeypatch.setitem(
+        ingest_module._ADAPTERS,
+        "claude-code",
+        ClaudeCodeAdapter(adapter_revision=1),
+    )
+    assert ingest_once(store, secret, roots=roots).diagnostics_recorded == 5
+    monkeypatch.setitem(ingest_module._ADAPTERS, "claude-code", current_adapter)
+    monkeypatch.setattr(ingest_module, "_MAX_READ_BYTES", len(original))
+    assert ingest_once(store, secret, roots=roots).diagnostics_recorded == 0
+    session.write_bytes(original + replacement * 4)
+
+    summaries = [ingest_once(store, secret, roots=roots) for _ in range(4)]
+
+    assert [summary.diagnostics_recorded for summary in summaries] == [1, 1, 1, 1]
+    assert store.diagnostics() == [
+        ParseOutcome(
+            agent="claude-code", discriminator="invalid-json", kind="malformed", count=4
+        ),
+        ParseOutcome(
+            agent="claude-code",
+            discriminator="unrecognized",
+            kind="unsupported",
+            count=5,
+        ),
+    ]
+
+
+def test_semantic_replay_keeps_diagnostics_for_a_rewritten_generation(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    store, secret = _store(tmp_path)
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir()
+    session = claude_dir / "session-1.jsonl"
+    shared_first_line = b'{"type":"unrecognized"}\n'
+    session.write_bytes(shared_first_line * 3)
+    roots = (_root("claude-code", claude_dir),)
+    current_adapter = ClaudeCodeAdapter()
+    monkeypatch.setitem(
+        ingest_module._ADAPTERS,
+        "claude-code",
+        ClaudeCodeAdapter(adapter_revision=1),
+    )
+    assert ingest_once(store, secret, roots=roots).diagnostics_recorded == 3
+    monkeypatch.setitem(ingest_module._ADAPTERS, "claude-code", current_adapter)
+    session.write_bytes(shared_first_line + b"not-json\n")
+
+    summary = ingest_once(store, secret, roots=roots)
+
+    assert summary.events_inserted == 0
+    assert summary.diagnostics_recorded == 1
+    assert store.diagnostics() == [
+        ParseOutcome(
+            agent="claude-code", discriminator="invalid-json", kind="malformed"
+        ),
+        ParseOutcome(
+            agent="claude-code",
+            discriminator="unrecognized",
+            kind="unsupported",
+            count=3,
+        ),
+    ]
 
 
 def test_truncation_then_rotation_both_safely_reread_without_stale_data(

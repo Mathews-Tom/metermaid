@@ -519,10 +519,9 @@ def test_omp_adapter_reports_an_overflowed_cost_literal_as_malformed() -> None:
 
 
 def test_no_diagnostic_outcome_ever_carries_token_usage_fields() -> None:
-    """A malformed/unsupported outcome is always a countable diagnostic, never
-    a disguised zero-usage event: ``ParseOutcome`` declares no token fields."""
+    """A malformed/unsupported outcome only carries labels, count, and identity."""
     field_names = {field.name for field in dataclasses.fields(ParseOutcome)}
-    assert field_names == {"agent", "discriminator", "kind", "count"}
+    assert field_names == {"agent", "discriminator", "kind", "count", "diagnostic_id"}
 
 
 def test_two_records_sharing_a_timestamp_get_distinct_event_ids_by_byte_start() -> None:

@@ -86,6 +86,7 @@ class ParseOutcome:
     discriminator: str
     kind: DiagnosticKind
     count: int = 1
+    diagnostic_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.agent not in _AGENTS:
@@ -93,6 +94,10 @@ class ParseOutcome:
         _require_safe_label("discriminator", self.discriminator)
         if self.count < 1:
             raise ValueError("Parse outcome count must be positive")
+        if self.diagnostic_id is not None:
+            _require_opaque_identifier("diagnostic_id", self.diagnostic_id)
+            if self.count != 1:
+                raise ValueError("Identified parse outcomes must have count one")
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +109,8 @@ class FileWatermark:
     observed_size: int
     modified_ns: int
     complete_offset: int
+    adapter_revision: int = 1
+    diagnostic_rebuild: bool = False
 
     def __post_init__(self) -> None:
         _require_opaque_identifier("source_locator", self.source_locator)
@@ -112,6 +119,10 @@ class FileWatermark:
             raise ValueError("Watermark counters must be non-negative")
         if self.complete_offset > self.observed_size:
             raise ValueError("complete_offset cannot exceed observed_size")
+        if self.adapter_revision < 1:
+            raise ValueError("adapter_revision must be positive")
+        if not isinstance(self.diagnostic_rebuild, bool):
+            raise ValueError("diagnostic_rebuild must be boolean")
 
 
 @dataclass(frozen=True, slots=True)

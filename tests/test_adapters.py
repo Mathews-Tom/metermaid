@@ -43,6 +43,7 @@ class _ProtocolProbe:
     never be mistaken for, a real per-agent adapter: PR2 supplies those."""
 
     agent: str
+    adapter_revision: int = 1
 
     def parse(
         self, record: CompleteRecord, *, context: RecordContext, secret: bytes

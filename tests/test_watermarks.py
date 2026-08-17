@@ -99,6 +99,24 @@ def test_a_duplicate_reread_of_the_same_bytes_stays_idempotent(
     assert second.lines == third.lines == ()
 
 
+def test_adapter_revision_change_replays_complete_records_once(tmp_path: Path) -> None:
+    path = tmp_path / "session.jsonl"
+    path.write_bytes(b'{"a":1}\n{"a":2}\n')
+    first = read_increment(path, None, _locator(path), _SECRET, adapter_revision=1)
+
+    replay = read_increment(
+        path, first.watermark, _locator(path), _SECRET, adapter_revision=2
+    )
+    stable = read_increment(
+        path, replay.watermark, _locator(path), _SECRET, adapter_revision=2
+    )
+
+    assert [line.payload for line in replay.lines] == [b'{"a":1}', b'{"a":2}']
+    assert replay.watermark.file_identity == first.watermark.file_identity
+    assert replay.watermark.adapter_revision == 2
+    assert stable.lines == ()
+
+
 def test_truncation_in_place_forces_a_safe_full_reread(tmp_path: Path) -> None:
     path = tmp_path / "session.jsonl"
     path.write_bytes(b'{"a":1}\n{"a":2}\n{"a":3}\n')

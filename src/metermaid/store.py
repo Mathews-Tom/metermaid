@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,10 +12,12 @@ from pathlib import Path
 from .domain import FileWatermark, LegacySnapshot, NormalizedEvent, ParseOutcome
 from .state import load_or_create_secret, resolve_state_paths
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 5
 """v1 adds ``events``/``file_watermarks``/``ingest_diagnostics`` plus an
 empty ``legacy_snapshots`` placeholder table; v2 gives that placeholder its
-mapped-value columns for the M4 legacy importer (see ``_apply_v2_schema``)."""
+mapped-value columns for the M4 legacy importer; v3 records per-file adapter
+semantic revisions; v4 persisted replay progress; v5 deduplicates diagnostics
+by opaque record identity."""
 
 
 def open_store(data_dir: Path | None = None) -> EventStore:
@@ -30,6 +32,7 @@ def open_store(data_dir: Path | None = None) -> EventStore:
 @dataclass(frozen=True, slots=True)
 class CommitResult:
     inserted_events: int
+    inserted_diagnostics: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,13 +62,25 @@ class EventStore:
             if current > SCHEMA_VERSION:
                 raise RuntimeError("Metermaid database uses a newer schema version")
             if current < 1:
-                self._apply_v1_schema(connection)
-                current = 1
-                connection.execute(f"PRAGMA user_version = {current}")
+                current = self._apply_atomic_migration(
+                    connection, target_version=1, apply=self._apply_v1_schema
+                )
             if current < 2:
-                self._apply_v2_schema(connection)
-                current = 2
-                connection.execute(f"PRAGMA user_version = {current}")
+                current = self._apply_atomic_migration(
+                    connection, target_version=2, apply=self._apply_v2_schema
+                )
+            if current < 3:
+                current = self._apply_atomic_migration(
+                    connection, target_version=3, apply=self._apply_v3_schema
+                )
+            if current < 4:
+                current = self._apply_atomic_migration(
+                    connection, target_version=4, apply=self._apply_v4_schema
+                )
+            if current < 5:
+                current = self._apply_atomic_migration(
+                    connection, target_version=5, apply=self._apply_v5_schema
+                )
 
     def commit_ingest(
         self,
@@ -97,7 +112,24 @@ class EventStore:
                     ).rowcount
                     for event in event_rows
                 )
+                inserted_diagnostics = 0
                 for outcome in outcome_rows:
+                    if outcome.diagnostic_id is not None:
+                        inserted = connection.execute(
+                            """
+                            INSERT OR IGNORE INTO ingest_diagnostic_records (
+                                diagnostic_id, agent, discriminator, kind
+                            ) VALUES (?, ?, ?, ?)
+                            """,
+                            (
+                                outcome.diagnostic_id,
+                                outcome.agent,
+                                outcome.discriminator,
+                                outcome.kind,
+                            ),
+                        ).rowcount
+                        if inserted == 0:
+                            continue
                     connection.execute(
                         """
                         INSERT INTO ingest_diagnostics (agent, discriminator, kind, count)
@@ -112,18 +144,21 @@ class EventStore:
                             outcome.count,
                         ),
                     )
+                    inserted_diagnostics += outcome.count
                 if watermark is not None:
                     connection.execute(
                         """
                         INSERT INTO file_watermarks (
                             source_locator, file_identity, observed_size, modified_ns,
-                            complete_offset
-                        ) VALUES (?, ?, ?, ?, ?)
+                            complete_offset, adapter_revision, diagnostic_rebuild
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(source_locator) DO UPDATE SET
                             file_identity = excluded.file_identity,
                             observed_size = excluded.observed_size,
                             modified_ns = excluded.modified_ns,
-                            complete_offset = excluded.complete_offset
+                            complete_offset = excluded.complete_offset,
+                            adapter_revision = excluded.adapter_revision,
+                            diagnostic_rebuild = excluded.diagnostic_rebuild
                         """,
                         (
                             watermark.source_locator,
@@ -131,9 +166,13 @@ class EventStore:
                             watermark.observed_size,
                             watermark.modified_ns,
                             watermark.complete_offset,
+                            watermark.adapter_revision,
+                            watermark.diagnostic_rebuild,
                         ),
                     )
-        return CommitResult(inserted_events=inserted_events)
+        return CommitResult(
+            inserted_events=inserted_events, inserted_diagnostics=inserted_diagnostics
+        )
 
     def events(self) -> list[NormalizedEvent]:
         """Return canonical events for later report aggregation."""
@@ -164,11 +203,21 @@ class EventStore:
         with self._connection() as connection:
             row = connection.execute(
                 """SELECT source_locator, file_identity, observed_size, modified_ns,
-                          complete_offset
+                          complete_offset, adapter_revision, diagnostic_rebuild
                    FROM file_watermarks WHERE source_locator = ?""",
                 (source_locator,),
             ).fetchone()
-        return FileWatermark(*row) if row is not None else None
+        if row is None:
+            return None
+        return FileWatermark(
+            source_locator=row[0],
+            file_identity=row[1],
+            observed_size=row[2],
+            modified_ns=row[3],
+            complete_offset=row[4],
+            adapter_revision=row[5],
+            diagnostic_rebuild=bool(row[6]),
+        )
 
     def commit_legacy_import(
         self, snapshots: Iterable[LegacySnapshot]
@@ -222,9 +271,9 @@ class EventStore:
 
     @staticmethod
     def _apply_v1_schema(connection: sqlite3.Connection) -> None:
-        connection.executescript(
+        for statement in (
             """
-            CREATE TABLE events (
+            CREATE TABLE IF NOT EXISTS events (
                 event_id TEXT PRIMARY KEY,
                 schema_version INTEGER NOT NULL,
                 agent TEXT NOT NULL,
@@ -242,30 +291,37 @@ class EventStore:
                 provider_cost_usd REAL,
                 safe_tool_category TEXT,
                 provenance TEXT NOT NULL
-            );
-            CREATE TABLE file_watermarks (
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS file_watermarks (
                 source_locator TEXT PRIMARY KEY,
                 file_identity TEXT NOT NULL,
                 observed_size INTEGER NOT NULL,
                 modified_ns INTEGER NOT NULL,
                 complete_offset INTEGER NOT NULL
-            );
-            CREATE TABLE ingest_diagnostics (
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS ingest_diagnostics (
                 agent TEXT NOT NULL,
                 discriminator TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 count INTEGER NOT NULL CHECK (count > 0),
                 PRIMARY KEY (agent, discriminator, kind)
-            );
-            CREATE TABLE legacy_snapshots (
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS legacy_snapshots (
                 legacy_id TEXT PRIMARY KEY,
                 source_fingerprint TEXT NOT NULL,
                 row_fingerprint TEXT NOT NULL,
                 imported_at TEXT NOT NULL,
                 UNIQUE(source_fingerprint, row_fingerprint)
-            );
-            """
-        )
+            )
+            """,
+        ):
+            connection.execute(statement)
 
     @staticmethod
     def _apply_v2_schema(connection: sqlite3.Connection) -> None:
@@ -277,9 +333,9 @@ class EventStore:
         safe: there is no live data to preserve, and SQLite cannot add a
         ``NOT NULL`` column without a default via ``ALTER TABLE``.
         """
-        connection.executescript(
+        connection.execute("DROP TABLE IF EXISTS legacy_snapshots")
+        connection.execute(
             """
-            DROP TABLE IF EXISTS legacy_snapshots;
             CREATE TABLE legacy_snapshots (
                 legacy_id TEXT PRIMARY KEY,
                 source_fingerprint TEXT NOT NULL,
@@ -294,9 +350,91 @@ class EventStore:
                 cache_write INTEGER NOT NULL,
                 cost_usd REAL NOT NULL,
                 UNIQUE(source_fingerprint, row_fingerprint)
-            );
+            )
             """
         )
+
+    @staticmethod
+    def _apply_atomic_migration(
+        connection: sqlite3.Connection,
+        *,
+        target_version: int,
+        apply: Callable[[sqlite3.Connection], None],
+    ) -> int:
+        """Apply one resumable schema step with its version marker."""
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            version = connection.execute("PRAGMA user_version").fetchone()
+            if version is None:
+                raise RuntimeError("Metermaid v1 store could not read schema version")
+            current = version[0]
+            if not isinstance(current, int):
+                raise RuntimeError(
+                    "Metermaid v1 store returned an invalid schema version"
+                )
+            if current > SCHEMA_VERSION:
+                raise RuntimeError("Metermaid database uses a newer schema version")
+            if current >= target_version:
+                connection.rollback()
+                return current
+            apply(connection)
+            connection.execute(f"PRAGMA user_version = {target_version}")
+        except BaseException:
+            connection.rollback()
+            raise
+        else:
+            connection.commit()
+            return target_version
+
+    @staticmethod
+    def _has_watermark_column(connection: sqlite3.Connection, name: str) -> bool:
+        return any(
+            row[1] == name
+            for row in connection.execute("PRAGMA table_info(file_watermarks)")
+        )
+
+    @staticmethod
+    def _apply_v3_schema(connection: sqlite3.Connection) -> None:
+        """Track parser semantics so corrected mappings can replay safely."""
+        if not EventStore._has_watermark_column(connection, "adapter_revision"):
+            connection.execute(
+                """
+                ALTER TABLE file_watermarks
+                ADD COLUMN adapter_revision INTEGER NOT NULL DEFAULT 1
+                """
+            )
+
+    @staticmethod
+    def _apply_v4_schema(connection: sqlite3.Connection) -> None:
+        """Preserve the published replay-progress schema migration."""
+        if not EventStore._has_watermark_column(connection, "replay_cutoff"):
+            connection.execute(
+                "ALTER TABLE file_watermarks ADD COLUMN replay_cutoff INTEGER"
+            )
+
+    @staticmethod
+    def _apply_v5_schema(connection: sqlite3.Connection) -> None:
+        """Rebuild diagnostic counters from local source records after upgrade."""
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ingest_diagnostic_records (
+                diagnostic_id TEXT PRIMARY KEY,
+                agent TEXT NOT NULL,
+                discriminator TEXT NOT NULL,
+                kind TEXT NOT NULL
+            )
+            """
+        )
+        if not EventStore._has_watermark_column(connection, "diagnostic_rebuild"):
+            connection.execute(
+                """
+                ALTER TABLE file_watermarks
+                ADD COLUMN diagnostic_rebuild INTEGER NOT NULL DEFAULT 0
+                """
+            )
+        connection.execute("DELETE FROM ingest_diagnostic_records")
+        connection.execute("DELETE FROM ingest_diagnostics")
+        connection.execute("UPDATE file_watermarks SET diagnostic_rebuild = 1")
 
 
 def _event_values(event: NormalizedEvent) -> tuple[object, ...]:

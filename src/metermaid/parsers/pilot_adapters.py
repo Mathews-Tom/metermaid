@@ -235,6 +235,7 @@ class ClaudeCodeAdapter:
     """Maps a reviewed Claude Code ``assistant`` record to a usage event."""
 
     agent: str = "claude-code"
+    adapter_revision: int = 2
 
     def parse(
         self, record: CompleteRecord, *, context: RecordContext, secret: bytes
@@ -289,6 +290,7 @@ class CodexAdapter:
     """Maps a reviewed Codex ``event_msg``/``token_count`` record to a usage event."""
 
     agent: str = "codex"
+    adapter_revision: int = 1
 
     def parse(
         self, record: CompleteRecord, *, context: RecordContext, secret: bytes
@@ -344,6 +346,7 @@ class PiAdapter:
     """Maps a reviewed Pi ``message`` record to a usage event."""
 
     agent: str = "pi"
+    adapter_revision: int = 1
 
     def parse(
         self, record: CompleteRecord, *, context: RecordContext, secret: bytes
@@ -394,6 +397,7 @@ class OmpAdapter:
     """Maps a reviewed OMP ``message`` record to a usage event."""
 
     agent: str = "omp"
+    adapter_revision: int = 1
 
     def parse(
         self, record: CompleteRecord, *, context: RecordContext, secret: bytes
