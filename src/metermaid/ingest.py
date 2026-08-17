@@ -61,7 +61,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO
 
@@ -132,7 +132,7 @@ class CompleteLine:
 
 @dataclass(frozen=True, slots=True)
 class ReadResult:
-    """A file's newly read complete lines and its refreshed watermark."""
+    """A file's complete lines and refreshed watermark."""
 
     watermark: FileWatermark
     lines: tuple[CompleteLine, ...]
@@ -200,13 +200,20 @@ def _file_identity(
 
 
 def _start_offset(
-    previous: FileWatermark | None, identity: str, observed_size: int
+    previous: FileWatermark | None,
+    identity: str,
+    observed_size: int,
+    adapter_revision: int,
 ) -> int:
     if previous is None:
+        return 0
+    if previous.diagnostic_rebuild:
         return 0
     if previous.file_identity != identity:
         return 0
     if observed_size < previous.observed_size:
+        return 0
+    if previous.adapter_revision != adapter_revision:
         return 0
     return previous.complete_offset
 
@@ -225,7 +232,12 @@ def _split_complete_lines(data: bytes, start_offset: int) -> tuple[CompleteLine,
 
 
 def read_increment(
-    path: Path, previous: FileWatermark | None, source_locator: str, secret: bytes
+    path: Path,
+    previous: FileWatermark | None,
+    source_locator: str,
+    secret: bytes,
+    *,
+    adapter_revision: int = 1,
 ) -> ReadResult:
     """Read up to one bounded batch of complete records newly written to
     ``path`` since ``previous``.
@@ -256,26 +268,33 @@ def read_increment(
     :data:`_MAX_READ_BYTES`), never a value from a separate, possibly
     racy ``stat`` call, keeping ``complete_offset <= observed_size`` true
     by construction. A backlog larger than the cap is caught up over
-    multiple calls.
+    multiple calls. A positive ``adapter_revision`` change forces one
+    replay from byte zero so records made valid by a parser correction
+    can be recovered. A replay only adds previously absent events; it
+    never rewrites an event that already has the same identity.
     """
+    if adapter_revision < 1:
+        raise ValueError("adapter_revision must be positive")
     with path.open("rb") as handle:
         stat_result = os.fstat(handle.fileno())
         fingerprint = _content_fingerprint(handle)
         identity = _file_identity(secret, stat_result, fingerprint)
-        start_offset = _start_offset(previous, identity, stat_result.st_size)
+        start_offset = _start_offset(
+            previous, identity, stat_result.st_size, adapter_revision
+        )
         handle.seek(start_offset)
         data = handle.read(_MAX_READ_BYTES)
 
     lines = _split_complete_lines(data, start_offset)
     complete_offset = start_offset + sum(len(line.payload) + 1 for line in lines)
     observed_size = start_offset + len(data)
-
     watermark = FileWatermark(
         source_locator=source_locator,
         file_identity=identity,
         observed_size=observed_size,
         modified_ns=stat_result.st_mtime_ns,
         complete_offset=complete_offset,
+        adapter_revision=adapter_revision,
     )
     return ReadResult(watermark=watermark, lines=lines)
 
@@ -295,6 +314,24 @@ def _decode_line(
     return decoded
 
 
+def _identified_outcome(
+    outcome: ParseOutcome,
+    *,
+    source_session_id: str,
+    byte_start: int,
+    payload: bytes,
+    secret: bytes,
+) -> ParseOutcome:
+    """Bind a diagnostic to opaque source bytes for replay-safe counting."""
+    payload_digest = hashlib.sha256(payload).hexdigest()
+    diagnostic_id = opaque_identifier(
+        secret,
+        "ingest-diagnostic",
+        f"{source_session_id}:{byte_start}:{payload_digest}",
+    )
+    return replace(outcome, diagnostic_id=diagnostic_id)
+
+
 def ingest_file(
     store: EventStore,
     candidate: CandidateFile,
@@ -307,14 +344,19 @@ def ingest_file(
     project_key = opaque_identifier(secret, "project", str(candidate.path.parent))
 
     previous = store.watermark(source_locator)
-    result = read_increment(candidate.path, previous, source_locator, secret)
+    result = read_increment(
+        candidate.path,
+        previous,
+        source_locator,
+        secret,
+        adapter_revision=adapter.adapter_revision,
+    )
     # Folding the file's identity into the session id keeps two different
     # generations of the same path (a truncation or a rotation) from ever
     # deriving the same event identity, even for byte-identical records.
     source_session_id = opaque_identifier(
         secret, "source-session", f"{resolved}:{result.watermark.file_identity}"
     )
-
     events: list[NormalizedEvent] = []
     outcomes: list[ParseOutcome] = []
     for line in result.lines:
@@ -322,7 +364,15 @@ def ingest_file(
         if decoded is None:
             continue
         if isinstance(decoded, ParseOutcome):
-            outcomes.append(decoded)
+            outcomes.append(
+                _identified_outcome(
+                    decoded,
+                    source_session_id=source_session_id,
+                    byte_start=line.byte_start,
+                    payload=line.payload,
+                    secret=secret,
+                )
+            )
             continue
         context = RecordContext(
             source_session_id=source_session_id,
@@ -333,13 +383,21 @@ def ingest_file(
         if isinstance(outcome, NormalizedEvent):
             events.append(outcome)
         else:
-            outcomes.append(outcome)
+            outcomes.append(
+                _identified_outcome(
+                    outcome,
+                    source_session_id=source_session_id,
+                    byte_start=line.byte_start,
+                    payload=line.payload,
+                    secret=secret,
+                )
+            )
 
     commit = store.commit_ingest(events, outcomes, result.watermark)
     return IngestSummary(
         files_read=1,
         events_inserted=commit.inserted_events,
-        diagnostics_recorded=sum(outcome.count for outcome in outcomes),
+        diagnostics_recorded=commit.inserted_diagnostics,
     )
 
 

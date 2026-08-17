@@ -102,6 +102,15 @@ class SourceAdapter(Protocol):
         """
         ...
 
+    @property
+    def adapter_revision(self) -> int:
+        """The positive semantic revision used to recover records with no event.
+
+        A replay retains event identity, so it cannot restate a row that
+        already exists with different mapped values.
+        """
+        ...
+
     def parse(
         self, record: CompleteRecord, *, context: RecordContext, secret: bytes
     ) -> AdapterOutcome:
