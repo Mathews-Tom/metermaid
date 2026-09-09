@@ -126,6 +126,27 @@ def test_commit_is_idempotent_and_preserves_missing_values(tmp_path: Path) -> No
     assert store.diagnostics() == [outcome]
 
 
+def test_commit_enriches_missing_reasoning_without_counting_an_insert(
+    tmp_path: Path,
+) -> None:
+    store = EventStore(tmp_path / "metermaid.sqlite3")
+    store.initialize()
+    prior = _event()
+    enriched = replace(prior, reasoning_tokens=3)
+
+    assert store.commit_ingest([prior], [], None).inserted_events == 1
+    assert store.commit_ingest([enriched], [], None).inserted_events == 0
+    assert store.events() == [enriched]
+
+    assert (
+        store.commit_ingest(
+            [replace(enriched, reasoning_tokens=4)], [], None
+        ).inserted_events
+        == 0
+    )
+    assert store.events() == [enriched]
+
+
 def test_identified_diagnostic_is_idempotent_without_source_text(
     tmp_path: Path,
 ) -> None:

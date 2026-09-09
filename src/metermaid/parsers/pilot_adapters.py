@@ -397,7 +397,7 @@ class OmpAdapter:
     """Maps a reviewed OMP ``message`` record to a usage event."""
 
     agent: str = "omp"
-    adapter_revision: int = 1
+    adapter_revision: int = 2
 
     def parse(
         self, record: CompleteRecord, *, context: RecordContext, secret: bytes
@@ -420,6 +420,7 @@ class OmpAdapter:
             model = _optional_label(message_map, "model")
             cache_read = _optional_int(usage, "cacheRead")
             cache_write = _optional_int(usage, "cacheWrite")
+            reasoning_tokens = _optional_int(usage, "reasoningTokens")
             provider_cost_usd = _optional_nested_number(usage, "cost", "total")
             tool_name = _optional_label(message_map, "toolName")
             return NormalizedEvent(
@@ -436,7 +437,7 @@ class OmpAdapter:
                 tokens_out=tokens_out,
                 cache_read=cache_read,
                 cache_write=cache_write,
-                reasoning_tokens=None,
+                reasoning_tokens=reasoning_tokens,
                 provider_cost_usd=provider_cost_usd,
                 safe_tool_category=_omp_tool_category(tool_name),
             )
