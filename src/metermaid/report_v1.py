@@ -82,12 +82,13 @@ class GroupAggregate:
 
 @dataclass(frozen=True, slots=True)
 class ObservedReport:
-    """Whole-selection totals plus per-agent/model/project breakdowns."""
+    """Whole-selection totals, breakdowns, and authority state."""
 
     event_count: int
     session_count: int
     tokens: TokenTotals
     provider_cost_usd: float | None
+    has_possible_omp_generation_overlap: bool
     by_agent: tuple[GroupAggregate, ...]
     by_model: tuple[GroupAggregate, ...]
     by_project_key: tuple[GroupAggregate, ...]
@@ -114,6 +115,35 @@ def select_events(
         project_key = filter_.project_key
         selected = [event for event in selected if event.project_key == project_key]
     return list(selected)
+
+
+def _has_possible_omp_generation_overlap(
+    events: Sequence[NormalizedEvent],
+) -> bool:
+    """Detect equal OMP usage semantics delivered by distinct source sessions."""
+    first_session_by_semantics: dict[tuple[object, ...], str] = {}
+    for event in events:
+        if event.agent != "omp" or event.provenance != "omp.message":
+            continue
+        semantics = (
+            event.record_kind,
+            event.occurred_at,
+            event.role,
+            event.model,
+            event.safe_tool_category,
+            event.tokens_in,
+            event.tokens_out,
+            event.cache_read,
+            event.cache_write,
+            event.reasoning_tokens,
+            event.provider_cost_usd,
+        )
+        first_session = first_session_by_semantics.setdefault(
+            semantics, event.source_session_id
+        )
+        if first_session != event.source_session_id:
+            return True
+    return False
 
 
 def _sum_optional_int(values: Sequence[int | None]) -> int | None:
@@ -173,6 +203,9 @@ def build_report(
         tokens=_token_totals(selected),
         provider_cost_usd=_sum_optional_float(
             [event.provider_cost_usd for event in selected]
+        ),
+        has_possible_omp_generation_overlap=_has_possible_omp_generation_overlap(
+            selected
         ),
         by_agent=_group_by(selected, lambda event: event.agent),
         by_model=_group_by(selected, lambda event: event.model or UNAVAILABLE_MODEL),
