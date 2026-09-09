@@ -144,7 +144,7 @@ def test_omp_adapter_maps_the_reviewed_message_shape() -> None:
     assert outcome.cache_read == 10
     assert outcome.cache_write == 5
     assert outcome.provider_cost_usd == 0.032
-    assert outcome.reasoning_tokens is None
+    assert outcome.reasoning_tokens == 3
     assert outcome.safe_tool_category == "read"
 
 

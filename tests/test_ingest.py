@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from pytest import MonkeyPatch
 
 import metermaid.ingest as ingest_module
+from metermaid.adapters import AdapterOutcome, CompleteRecord, RecordContext
 from metermaid.discover import SourceRoot
-from metermaid.domain import ParseOutcome
+from metermaid.domain import NormalizedEvent, ParseOutcome
 from metermaid.ingest import discover_candidate_files, ingest_once, read_increment
-from metermaid.parsers import ClaudeCodeAdapter
+from metermaid.parsers import ClaudeCodeAdapter, OmpAdapter
 from metermaid.state import (
     load_or_create_secret,
     opaque_identifier,
@@ -43,7 +45,7 @@ _OMP_RECORD = (
     b'{"type":"message","timestamp":"2026-08-16T00:00:00Z","message":'
     b'{"role":"assistant","model":"fixture-model","toolName":"read",'
     b'"usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":5,'
-    b'"cost":{"total":0.032}}}}\n'
+    b'"reasoningTokens":3,"cost":{"total":0.032}}}}\n'
 )
 
 _CLAUDE_NULL_THINKING_RECORD = (
@@ -199,6 +201,40 @@ def test_adapter_revision_recovery_restores_events_without_duplicate_diagnostics
     watermark = store.watermark(locator)
     assert watermark is not None
     assert watermark.adapter_revision == 2
+
+
+def test_omp_adapter_revision_replay_enriches_existing_event(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    class OldOmpAdapter:
+        agent: str = "omp"
+        adapter_revision: int = 1
+
+        def parse(
+            self, record: CompleteRecord, *, context: RecordContext, secret: bytes
+        ) -> AdapterOutcome:
+            outcome = OmpAdapter().parse(record, context=context, secret=secret)
+            assert isinstance(outcome, NormalizedEvent)
+            return replace(outcome, reasoning_tokens=None)
+
+    store, secret = _store(tmp_path)
+    omp_dir = tmp_path / "omp"
+    session = omp_dir / "session.jsonl"
+    omp_dir.mkdir()
+    session.write_bytes(_OMP_RECORD)
+    roots = (_root("omp", omp_dir),)
+    monkeypatch.setitem(ingest_module._ADAPTERS, "omp", OldOmpAdapter())
+
+    initial = ingest_once(store, secret, roots=roots)
+
+    assert initial.events_inserted == 1
+    assert store.events()[0].reasoning_tokens is None
+    monkeypatch.setitem(ingest_module._ADAPTERS, "omp", OmpAdapter())
+
+    replayed = ingest_once(store, secret, roots=roots)
+
+    assert replayed.events_inserted == 0
+    assert store.events()[0].reasoning_tokens == 3
 
 
 def test_bounded_semantic_replay_never_recounts_prior_diagnostics(

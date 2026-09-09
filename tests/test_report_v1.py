@@ -126,6 +126,114 @@ def test_session_count_deduplicates_by_source_session_id() -> None:
     assert observed.session_count == 2
 
 
+# --- OMP source-generation authority ----------------------------------------
+
+
+def test_build_report_marks_matching_omp_usage_from_two_generations() -> None:
+    events = [
+        _event(
+            event_id="1" * 64,
+            agent="omp",
+            source_session_id="a" * 64,
+            model="fixture-model",
+            tokens_in=100,
+            tokens_out=20,
+            cache_read=10,
+            cache_write=5,
+            reasoning_tokens=3,
+            provider_cost_usd=0.032,
+        ),
+        _event(
+            event_id="2" * 64,
+            agent="omp",
+            source_session_id="c" * 64,
+            model="fixture-model",
+            tokens_in=100,
+            tokens_out=20,
+            cache_read=10,
+            cache_write=5,
+            reasoning_tokens=3,
+            provider_cost_usd=0.032,
+        ),
+    ]
+
+    observed = build_report(events)
+
+    assert observed.has_possible_omp_generation_overlap is True
+    assert observed.event_count == 2
+    assert observed.tokens.tokens_in == 200
+
+
+def test_build_report_keeps_same_session_repeats_authoritative() -> None:
+    events = [
+        _event(
+            event_id="1" * 64,
+            agent="omp",
+            source_session_id="a" * 64,
+            tokens_in=100,
+        ),
+        _event(
+            event_id="2" * 64,
+            agent="omp",
+            source_session_id="a" * 64,
+            tokens_in=100,
+        ),
+    ]
+
+    assert build_report(events).has_possible_omp_generation_overlap is False
+
+
+def test_build_report_keeps_changed_omp_usage_authoritative() -> None:
+    events = [
+        _event(
+            event_id="1" * 64,
+            agent="omp",
+            source_session_id="a" * 64,
+            tokens_in=100,
+        ),
+        _event(
+            event_id="2" * 64,
+            agent="omp",
+            source_session_id="c" * 64,
+            tokens_in=101,
+        ),
+    ]
+
+    assert build_report(events).has_possible_omp_generation_overlap is False
+
+
+def test_build_report_ignores_non_omp_generation_overlap() -> None:
+    events = [
+        _event(event_id="1" * 64, source_session_id="a" * 64, tokens_in=100),
+        _event(event_id="2" * 64, source_session_id="c" * 64, tokens_in=100),
+    ]
+
+    assert build_report(events).has_possible_omp_generation_overlap is False
+
+
+def test_build_report_rechecks_overlap_after_project_filtering() -> None:
+    events = [
+        _event(
+            event_id="1" * 64,
+            agent="omp",
+            source_session_id="a" * 64,
+            project_key="b" * 64,
+            tokens_in=100,
+        ),
+        _event(
+            event_id="2" * 64,
+            agent="omp",
+            source_session_id="c" * 64,
+            project_key="d" * 64,
+            tokens_in=100,
+        ),
+    ]
+
+    observed = build_report(events, ReportFilter(project_key="b" * 64))
+
+    assert observed.has_possible_omp_generation_overlap is False
+
+
 # --- grouping: agent / model / opaque project key ----------------------------
 
 
@@ -278,6 +386,47 @@ def _seed_store(tmp_path: Path) -> Path:
     return data_dir
 
 
+def test_report_command_marks_selected_omp_overlap_non_authoritative(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data_dir = tmp_path / "state"
+    paths = resolve_state_paths(data_dir)
+    load_or_create_secret(paths)
+    store = EventStore(paths.database)
+    store.initialize()
+    store.commit_ingest(
+        [
+            _event(
+                event_id="1" * 64,
+                agent="omp",
+                source_session_id="a" * 64,
+                model="fixture-model",
+                tokens_in=100,
+            ),
+            _event(
+                event_id="2" * 64,
+                agent="omp",
+                source_session_id="c" * 64,
+                model="fixture-model",
+                tokens_in=100,
+            ),
+        ],
+        [],
+        None,
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["metermaid", "report", "--data-dir", str(data_dir)]
+    )
+
+    main()
+
+    out = capsys.readouterr().out
+    assert "non-authoritative" in out
+    assert "not deduplicated" in out
+    assert "a" * 64 not in out
+    assert "c" * 64 not in out
+
+
 def test_report_command_renders_unavailable_for_missing_counters(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -291,6 +440,7 @@ def test_report_command_renders_unavailable_for_missing_counters(
     out = capsys.readouterr().out
     assert "unavailable" in out
     assert "Observed: 2" in out
+    assert "non-authoritative" not in out
 
 
 def test_report_command_never_prints_a_raw_path_session_or_project_id(

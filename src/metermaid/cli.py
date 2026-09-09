@@ -213,6 +213,12 @@ def _report_group_table(
 
 
 def _print_observed_report(observed: ObservedReport) -> None:
+    if observed.has_possible_omp_generation_overlap:
+        console.print(
+            "[bold yellow]Warning:[/bold yellow] Selected OMP totals are "
+            "non-authoritative: possible source-generation overlap. All observed "
+            "events are retained and not deduplicated."
+        )
     console.print(
         f"Observed: [bold]{observed.event_count}[/bold] events, "
         f"[cyan]{observed.session_count}[/cyan] sessions"

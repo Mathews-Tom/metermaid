@@ -88,7 +88,7 @@ class EventStore:
         outcomes: Iterable[ParseOutcome],
         watermark: FileWatermark | None,
     ) -> CommitResult:
-        """Atomically store idempotent events, diagnostics, and optional watermark."""
+        """Atomically store events and fill a missing reasoning counter on replay."""
         event_rows = tuple(events)
         outcome_rows = tuple(outcomes)
         if len({event.event_id for event in event_rows}) != len(event_rows):
@@ -98,8 +98,9 @@ class EventStore:
 
         with self._connection() as connection:
             with connection:
-                inserted_events = sum(
-                    connection.execute(
+                inserted_events = 0
+                for event in event_rows:
+                    inserted = connection.execute(
                         """
                         INSERT OR IGNORE INTO events (
                             event_id, schema_version, agent, source_session_id, project_key,
@@ -110,8 +111,15 @@ class EventStore:
                         """,
                         _event_values(event),
                     ).rowcount
-                    for event in event_rows
-                )
+                    inserted_events += inserted
+                    if inserted == 0 and event.reasoning_tokens is not None:
+                        connection.execute(
+                            """
+                            UPDATE events SET reasoning_tokens = ?
+                            WHERE event_id = ? AND reasoning_tokens IS NULL
+                            """,
+                            (event.reasoning_tokens, event.event_id),
+                        )
                 inserted_diagnostics = 0
                 for outcome in outcome_rows:
                     if outcome.diagnostic_id is not None:

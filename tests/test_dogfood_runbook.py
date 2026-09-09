@@ -118,13 +118,22 @@ def test_runbook_contains_no_leaky_absolute_paths() -> None:
         assert prefix not in text
 
 
-def test_local_ledger_allows_active_dates_but_no_final_disposition() -> None:
-    """A live local ledger records the dogfood period but not its outcome."""
+def test_local_ledger_has_an_active_or_final_disposition_state() -> None:
+    """A local ledger supports both a live run and a completed disposition."""
     if not LEDGER.exists():
         pytest.skip("local ledger is not present in this checkout")
     text = LEDGER.read_text()
+    disposition = next(
+        line for line in text.splitlines() if line.startswith("Disposition:")
+    )
+
     assert "Period:" in text
-    assert "Disposition: <STABLE | ITERATE | STOP>" in text
+    assert disposition in {
+        "Disposition: <STABLE | ITERATE | STOP>",
+        "Disposition: STABLE",
+        "Disposition: ITERATE",
+        "Disposition: STOP",
+    }
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
