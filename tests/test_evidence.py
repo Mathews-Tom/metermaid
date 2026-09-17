@@ -43,12 +43,15 @@ def _event(moment: datetime = _MIDDAY, event_id: str = "1" * 64) -> NormalizedEv
     )
 
 
-def _beats(count: int, *, spacing: int = _INTERVAL) -> list[WatchHeartbeat]:
+def _beats(
+    count: int, *, spacing: int = _INTERVAL, poll_seconds: int | None = None
+) -> list[WatchHeartbeat]:
     return [
         WatchHeartbeat(
             observed_at=_MIDDAY + timedelta(seconds=spacing * offset),
             run_id="4" * 64,
             interval_seconds=_INTERVAL,
+            poll_seconds=poll_seconds,
         )
         for offset in range(count)
     ]
@@ -148,6 +151,42 @@ def test_heartbeat_gap_beyond_tolerance_makes_a_reviewed_day_incomplete() -> Non
     day = coverage.days[0]
     assert day.status == "incomplete"
     assert day.longest_gap_seconds == _INTERVAL * (GAP_TOLERANCE + 1)
+
+
+def test_slow_ingest_pass_does_not_look_like_a_stopped_watcher() -> None:
+    """A poll's real period is its interval plus its own ingest work.
+
+    On a large corpus that work dominates the interval, so a gap far
+    wider than the interval is normal cadence rather than downtime.
+    """
+    poll_seconds = _INTERVAL * 3
+    cadence = _INTERVAL + poll_seconds
+    busy = _beats(4, spacing=cadence, poll_seconds=poll_seconds)
+
+    coverage = _coverage([_event()], busy, [_review()])
+
+    day = coverage.days[0]
+    assert day.longest_gap_seconds == cadence
+    assert cadence > _INTERVAL * GAP_TOLERANCE
+    assert day.status == "qualified"
+
+
+def test_stopped_watcher_is_incomplete_even_with_slow_polls() -> None:
+    poll_seconds = _INTERVAL * 3
+    downtime = (_INTERVAL + poll_seconds) * GAP_TOLERANCE + 1
+    interrupted = _beats(2, spacing=downtime, poll_seconds=poll_seconds)
+
+    coverage = _coverage([_event()], interrupted, [_review()])
+
+    assert coverage.days[0].status == "incomplete"
+
+
+def test_heartbeat_without_a_measured_duration_falls_back_to_its_interval() -> None:
+    legacy = _beats(2, spacing=_INTERVAL * GAP_TOLERANCE + 1)
+
+    coverage = _coverage([_event()], legacy, [_review()])
+
+    assert coverage.days[0].status == "incomplete"
 
 
 def test_active_day_without_any_heartbeat_is_incomplete() -> None:

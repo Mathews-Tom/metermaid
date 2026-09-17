@@ -237,6 +237,7 @@ def test_watch_loop_records_one_heartbeat_per_poll(
     assert len(heartbeats) == 3
     assert {beat.run_id for beat in heartbeats} == {heartbeats[0].run_id}
     assert {beat.interval_seconds for beat in heartbeats} == {30}
+    assert {beat.poll_seconds for beat in heartbeats} == {30}
 
 
 def test_status_reports_a_qualified_day_from_recorded_evidence(

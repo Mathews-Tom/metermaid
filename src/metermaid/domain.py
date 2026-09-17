@@ -180,17 +180,26 @@ class WatchHeartbeat:
     ``run_id`` is derived through the machine-local secret so a restart is
     distinguishable from an uninterrupted run without persisting a process
     identifier, executable path, hostname, or user name.
+
+    ``poll_seconds`` is how long the poll's own ingest pass took. A
+    watcher's real period is its configured interval plus that work, so
+    continuity can only be judged against both. It is ``None`` for
+    heartbeats recorded before the duration was measured, never a
+    fabricated zero.
     """
 
     observed_at: datetime
     run_id: str
     interval_seconds: int
+    poll_seconds: int | None = None
 
     def __post_init__(self) -> None:
         _require_aware_utc("observed_at", self.observed_at)
         _require_opaque_identifier("run_id", self.run_id)
         if self.interval_seconds < 1:
             raise ValueError("interval_seconds must be positive")
+        if self.poll_seconds is not None and self.poll_seconds < 0:
+            raise ValueError("poll_seconds must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)

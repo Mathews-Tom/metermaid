@@ -129,18 +129,25 @@ def _watch_loop(
     test can intercept the real ``time.sleep`` through ``time`` module
     patching even when this is invoked indirectly through ``_cmd_watch``.
 
-    Each poll records a heartbeat, which is what makes dogfood watcher
-    continuity a measured fact instead of a recollection.
+    Each poll records a heartbeat carrying how long its own ingest pass
+    took, which is what makes dogfood watcher continuity a measured fact
+    instead of a recollection: the real period is the interval plus that
+    work, and on a large corpus the work dominates.
     """
     wait = sleep if sleep is not None else time.sleep
     clock = now if now is not None else lambda: datetime.now(UTC)
     run_id = _watch_run_id(secret, clock())
     try:
         while True:
+            started_at = clock()
             _print_ingest_summary(ingest_once(store, secret))
+            observed_at = clock()
             store.record_heartbeat(
                 WatchHeartbeat(
-                    observed_at=clock(), run_id=run_id, interval_seconds=interval
+                    observed_at=observed_at,
+                    run_id=run_id,
+                    interval_seconds=interval,
+                    poll_seconds=int((observed_at - started_at).total_seconds()),
                 )
             )
             wait(interval)

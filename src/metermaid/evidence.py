@@ -39,12 +39,15 @@ from typing import Literal, Protocol
 from .domain import DiagnosticReview, NormalizedEvent, WatchHeartbeat
 from .state import event_identifier
 
-GAP_TOLERANCE = 3
-"""Multiple of a day's recorded poll interval tolerated between heartbeats.
+GAP_TOLERANCE = 2
+"""Multiple of a day's real poll period tolerated between heartbeats.
 
-A foreground loop can be delayed by a slow ingest pass or a busy machine
-without that meaning the watcher stopped, so continuity allows several
-missed polls before a day is called incomplete.
+A poll's real period is the configured interval plus the ingest work that
+poll performed, which on a large corpus dominates the interval outright.
+Doubling that measured period absorbs a slow pass or a busy machine while
+still exposing a watcher that actually stopped. Heartbeats predating the
+measured duration fall back to the interval alone, which is all the
+evidence they carry.
 """
 
 DayStatus = Literal["idle", "qualified", "incomplete"]
@@ -208,8 +211,10 @@ def _status(
         return "idle"
     if review_count == 0 or not heartbeats:
         return "incomplete"
-    tolerated = max(heartbeat.interval_seconds for heartbeat in heartbeats)
-    tolerated *= GAP_TOLERANCE
+    tolerated = GAP_TOLERANCE * max(
+        heartbeat.interval_seconds + (heartbeat.poll_seconds or 0)
+        for heartbeat in heartbeats
+    )
     if longest_gap_seconds is not None and longest_gap_seconds > tolerated:
         return "incomplete"
     return "qualified"

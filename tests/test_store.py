@@ -69,9 +69,18 @@ def test_initialize_creates_wal_schema(tmp_path: Path) -> None:
 
 
 def _heartbeat(
-    moment: datetime, *, run_id: str = "1" * 64, interval: int = 30
+    moment: datetime,
+    *,
+    run_id: str = "1" * 64,
+    interval: int = 30,
+    poll_seconds: int | None = None,
 ) -> WatchHeartbeat:
-    return WatchHeartbeat(observed_at=moment, run_id=run_id, interval_seconds=interval)
+    return WatchHeartbeat(
+        observed_at=moment,
+        run_id=run_id,
+        interval_seconds=interval,
+        poll_seconds=poll_seconds,
+    )
 
 
 def test_heartbeat_is_idempotent_within_one_second(tmp_path: Path) -> None:
@@ -118,6 +127,47 @@ def test_upgrade_to_evidence_schema_preserves_existing_rows(tmp_path: Path) -> N
     assert store.events() == [_event()]
     assert store.watermark("d" * 64) == _watermark()
     assert store.heartbeats() == []
+
+
+def test_heartbeat_round_trips_its_measured_poll_duration(tmp_path: Path) -> None:
+    store = EventStore(tmp_path / "metermaid.sqlite3")
+    store.initialize()
+    moment = datetime(2026, 9, 17, 10, 0, 0, tzinfo=UTC)
+
+    store.record_heartbeat(_heartbeat(moment, poll_seconds=42))
+
+    assert store.heartbeats()[0].poll_seconds == 42
+
+
+def test_upgrade_keeps_a_heartbeat_recorded_before_durations_existed(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "metermaid.sqlite3"
+    store = EventStore(database)
+    store.initialize()
+    moment = datetime(2026, 9, 17, 10, 0, 0, tzinfo=UTC)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE watch_heartbeats")
+        connection.execute(
+            """
+            CREATE TABLE watch_heartbeats (
+                observed_at TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                interval_seconds INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO watch_heartbeats VALUES (?, ?, ?)",
+            (moment.isoformat(), "1" * 64, 30),
+        )
+        connection.execute("PRAGMA user_version = 6")
+
+    EventStore(database).initialize()
+
+    recorded = store.heartbeats()
+    assert [beat.observed_at for beat in recorded] == [moment]
+    assert recorded[0].poll_seconds is None
 
 
 def test_initialize_rolls_back_interrupted_v1_migration(

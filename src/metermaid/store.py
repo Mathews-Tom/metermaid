@@ -19,13 +19,14 @@ from .domain import (
 )
 from .state import load_or_create_secret, resolve_state_paths
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 """v1 adds ``events``/``file_watermarks``/``ingest_diagnostics`` plus an
 empty ``legacy_snapshots`` placeholder table; v2 gives that placeholder its
 mapped-value columns for the M4 legacy importer; v3 records per-file adapter
 semantic revisions; v4 persisted replay progress; v5 deduplicates diagnostics
 by opaque record identity; v6 records self-observed dogfood evidence as
-``watch_heartbeats`` and ``diagnostic_reviews``."""
+``watch_heartbeats`` and ``diagnostic_reviews``; v7 records how long each
+watcher poll took so continuity is judged against the real period."""
 
 
 def open_store(data_dir: Path | None = None) -> EventStore:
@@ -92,6 +93,10 @@ class EventStore:
             if current < 6:
                 current = self._apply_atomic_migration(
                     connection, target_version=6, apply=self._apply_v6_schema
+                )
+            if current < 7:
+                current = self._apply_atomic_migration(
+                    connection, target_version=7, apply=self._apply_v7_schema
                 )
 
     def commit_ingest(
@@ -252,13 +257,14 @@ class EventStore:
                 inserted = connection.execute(
                     """
                     INSERT OR IGNORE INTO watch_heartbeats (
-                        observed_at, run_id, interval_seconds
-                    ) VALUES (?, ?, ?)
+                        observed_at, run_id, interval_seconds, poll_seconds
+                    ) VALUES (?, ?, ?, ?)
                     """,
                     (
                         _heartbeat_key(heartbeat.observed_at),
                         heartbeat.run_id,
                         heartbeat.interval_seconds,
+                        heartbeat.poll_seconds,
                     ),
                 ).rowcount
         return inserted == 1
@@ -267,7 +273,7 @@ class EventStore:
         """Return recorded watcher polls in observation order."""
         with self._connection() as connection:
             rows = connection.execute(
-                """SELECT observed_at, run_id, interval_seconds
+                """SELECT observed_at, run_id, interval_seconds, poll_seconds
                    FROM watch_heartbeats ORDER BY observed_at"""
             ).fetchall()
         return [
@@ -275,6 +281,7 @@ class EventStore:
                 observed_at=datetime.fromisoformat(row[0]),
                 run_id=row[1],
                 interval_seconds=row[2],
+                poll_seconds=row[3],
             )
             for row in rows
         ]
@@ -555,6 +562,27 @@ class EventStore:
             """,
         ):
             connection.execute(statement)
+
+    @staticmethod
+    def _apply_v7_schema(connection: sqlite3.Connection) -> None:
+        """Record how long each watcher poll took, leaving old rows null.
+
+        A watcher's real period is its interval plus the poll's own ingest
+        work, so continuity cannot be judged from the interval alone once
+        a corpus is large. Heartbeats recorded before this column existed
+        keep a null duration rather than a fabricated zero.
+        """
+        if not EventStore._has_heartbeat_column(connection, "poll_seconds"):
+            connection.execute(
+                "ALTER TABLE watch_heartbeats ADD COLUMN poll_seconds INTEGER"
+            )
+
+    @staticmethod
+    def _has_heartbeat_column(connection: sqlite3.Connection, column: str) -> bool:
+        return any(
+            row[1] == column
+            for row in connection.execute("PRAGMA table_info(watch_heartbeats)")
+        )
 
 
 def _event_values(event: NormalizedEvent) -> tuple[object, ...]:
