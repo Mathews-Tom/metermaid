@@ -166,3 +166,58 @@ class LegacySnapshot:
                 raise ValueError(f"{name} must be non-negative")
         if self.cost_usd < 0:
             raise ValueError("cost_usd must be non-negative")
+
+
+def _require_aware_utc(name: str, value: datetime) -> None:
+    if value.tzinfo is None:
+        raise ValueError(f"{name} must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class WatchHeartbeat:
+    """One recorded foreground-watcher poll, with no process detail.
+
+    ``run_id`` is derived through the machine-local secret so a restart is
+    distinguishable from an uninterrupted run without persisting a process
+    identifier, executable path, hostname, or user name.
+
+    ``poll_seconds`` is how long the poll's own ingest pass took. A
+    watcher's real period is its configured interval plus that work, so
+    continuity can only be judged against both. It is ``None`` for
+    heartbeats recorded before the duration was measured, never a
+    fabricated zero.
+    """
+
+    observed_at: datetime
+    run_id: str
+    interval_seconds: int
+    poll_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        _require_aware_utc("observed_at", self.observed_at)
+        _require_opaque_identifier("run_id", self.run_id)
+        if self.interval_seconds < 1:
+            raise ValueError("interval_seconds must be positive")
+        if self.poll_seconds is not None and self.poll_seconds < 0:
+            raise ValueError("poll_seconds must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticReview:
+    """One acknowledged review of a displayed diagnostic state.
+
+    ``state_fingerprint`` is derived through the machine-local secret over
+    the diagnostic rows the acknowledged command displayed, so an
+    acknowledgement names the exact state the owner saw and cannot be
+    inherited by a later, different state.
+    """
+
+    reviewed_at: datetime
+    state_fingerprint: str
+    diagnostic_count: int
+
+    def __post_init__(self) -> None:
+        _require_aware_utc("reviewed_at", self.reviewed_at)
+        _require_opaque_identifier("state_fingerprint", self.state_fingerprint)
+        if self.diagnostic_count < 0:
+            raise ValueError("diagnostic_count must be non-negative")

@@ -13,6 +13,12 @@ from rich.table import Table
 
 from .discover import PILOT_AGENTS
 from .doctor import DoctorReport, build_doctor_report
+from .domain import DiagnosticReview, WatchHeartbeat
+from .evidence import (
+    EvidenceCoverage,
+    build_evidence_coverage,
+    diagnostic_state_fingerprint,
+)
 from .export_v1 import build_export, export_preview, write_export
 from .ingest import IngestSummary, ingest_once
 from .legacy_v1 import (
@@ -24,7 +30,7 @@ from .legacy_v1 import (
 )
 from .models import DEFAULT_INTERVAL, SESSIONS_DIR
 from .report_v1 import GroupAggregate, ObservedReport, ReportFilter, build_report
-from .state import load_or_create_secret, resolve_state_paths
+from .state import load_or_create_secret, opaque_identifier, resolve_state_paths
 from .store import EventStore
 
 console = Console()
@@ -98,12 +104,23 @@ def _parse_range_bound(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def _watch_run_id(secret: bytes, started_at: datetime) -> str:
+    """Derive an opaque identifier for one foreground watcher run.
+
+    Folds only the run's own start instant through the machine-local
+    secret, so consecutive runs are distinguishable without persisting a
+    process identifier, executable path, hostname, or user name.
+    """
+    return opaque_identifier(secret, "watch-run", started_at.isoformat())
+
+
 def _watch_loop(
     store: EventStore,
     secret: bytes,
     interval: int,
     *,
     sleep: Callable[[float], None] | None = None,
+    now: Callable[[], datetime] | None = None,
 ) -> None:
     """Foreground incremental-ingest polling loop; stops on ``KeyboardInterrupt``.
 
@@ -111,11 +128,28 @@ def _watch_loop(
     rather than bound as a default at function-definition time, so a
     test can intercept the real ``time.sleep`` through ``time`` module
     patching even when this is invoked indirectly through ``_cmd_watch``.
+
+    Each poll records a heartbeat carrying how long its own ingest pass
+    took, which is what makes dogfood watcher continuity a measured fact
+    instead of a recollection: the real period is the interval plus that
+    work, and on a large corpus the work dominates.
     """
     wait = sleep if sleep is not None else time.sleep
+    clock = now if now is not None else lambda: datetime.now(UTC)
+    run_id = _watch_run_id(secret, clock())
     try:
         while True:
+            started_at = clock()
             _print_ingest_summary(ingest_once(store, secret))
+            observed_at = clock()
+            store.record_heartbeat(
+                WatchHeartbeat(
+                    observed_at=observed_at,
+                    run_id=run_id,
+                    interval_seconds=interval,
+                    poll_seconds=int((observed_at - started_at).total_seconds()),
+                )
+            )
             wait(interval)
     except KeyboardInterrupt:
         console.print("[dim]Stopped[/dim]")
@@ -141,6 +175,37 @@ def _discovery_table(report: DoctorReport) -> Table:
     return t
 
 
+EVIDENCE_WINDOW_DAYS = 14
+"""Trailing days of dogfood evidence ``status`` reports."""
+
+
+def _evidence_table(coverage: EvidenceCoverage) -> Table:
+    t = Table(title="Dogfood evidence", box=None)
+    t.add_column("Day", style="cyan")
+    t.add_column("Status")
+    t.add_column("Events", justify="right")
+    t.add_column("Heartbeats", justify="right")
+    t.add_column("Longest gap (s)", justify="right")
+    t.add_column("Reviews", justify="right")
+    styles = {
+        "qualified": "[green]qualified[/green]",
+        "incomplete": "[yellow]incomplete[/yellow]",
+        "idle": "[dim]idle[/dim]",
+    }
+    for day in coverage.days:
+        t.add_row(
+            day.day.isoformat(),
+            styles[day.status],
+            str(day.event_count),
+            str(day.heartbeat_count),
+            _format_optional_int(day.longest_gap_seconds),
+            str(day.review_count),
+        )
+    if not coverage.days:
+        t.add_row("[dim]none[/dim]", "", "", "", "", "")
+    return t
+
+
 def _cmd_status(args: argparse.Namespace) -> None:
     store, _secret = _open_v1_store(args)
     events = store.events()
@@ -154,10 +219,24 @@ def _cmd_status(args: argparse.Namespace) -> None:
         f"[dim]{diagnostic_total}[/dim] diagnostics"
     )
     console.print(_discovery_table(build_doctor_report(store)))
+    coverage = build_evidence_coverage(
+        events,
+        store.heartbeats(),
+        store.diagnostic_reviews(),
+        window_days=EVIDENCE_WINDOW_DAYS,
+        until=datetime.now(UTC).date(),
+    )
+    console.print(
+        f"Evidence: [green]{coverage.qualified_days}[/green] qualified, "
+        f"[yellow]{coverage.incomplete_days}[/yellow] incomplete, "
+        f"[dim]{coverage.idle_days}[/dim] idle "
+        f"(last {EVIDENCE_WINDOW_DAYS} days)"
+    )
+    console.print(_evidence_table(coverage))
 
 
 def _cmd_doctor(args: argparse.Namespace) -> None:
-    store, _secret = _open_v1_store(args)
+    store, secret = _open_v1_store(args)
     report = build_doctor_report(store)
 
     console.print(_discovery_table(report))
@@ -172,6 +251,15 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     if not report.counts:
         outcomes.add_row("[dim]none[/dim]", "", "", "")
     console.print(outcomes)
+    if getattr(args, "acknowledge", False):
+        store.record_diagnostic_review(
+            DiagnosticReview(
+                reviewed_at=datetime.now(UTC),
+                state_fingerprint=diagnostic_state_fingerprint(secret, report.counts),
+                diagnostic_count=sum(row.count for row in report.counts),
+            )
+        )
+        console.print("[green]Acknowledged[/green] this diagnostic state as reviewed.")
 
 
 def _format_optional_int(value: int | None) -> str:
@@ -348,6 +436,11 @@ def main() -> None:
 
     doc = sub.add_parser("doctor")
     doc.add_argument("--data-dir", type=Path, dest="v1_data_dir", default=None)
+    doc.add_argument(
+        "--acknowledge",
+        action="store_true",
+        help="record this displayed diagnostic state as reviewed",
+    )
     doc.set_defaults(func=_cmd_doctor)
 
     rep = sub.add_parser("report")
