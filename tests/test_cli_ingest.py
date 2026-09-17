@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from pytest import MonkeyPatch
 
 from metermaid.cli import _positive_interval, _watch_loop, main
+from metermaid.domain import DiagnosticReview, NormalizedEvent, WatchHeartbeat
 from metermaid.state import load_or_create_secret, resolve_state_paths
 from metermaid.store import EventStore
 
@@ -207,6 +209,88 @@ def test_watch_loop_polls_ingest_once_per_cycle_until_interrupted(
 
     assert calls["count"] == 2
     assert len(store.events()) == 1
+
+
+def test_watch_loop_records_one_heartbeat_per_poll(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _seed_codex_source(home)
+    _use_fixture_home(monkeypatch, home)
+    paths = resolve_state_paths(tmp_path / "state")
+    secret = load_or_create_secret(paths)
+    store = EventStore(paths.database)
+    store.initialize()
+    base = datetime(2026, 9, 17, 9, 0, tzinfo=UTC)
+    ticks = iter(base + timedelta(seconds=30 * offset) for offset in range(8))
+    polls = {"count": 0}
+
+    def _sleep(_seconds: float) -> None:
+        polls["count"] += 1
+        if polls["count"] >= 3:
+            raise KeyboardInterrupt()
+
+    _watch_loop(store, secret, 30, sleep=_sleep, now=lambda: next(ticks))
+
+    heartbeats = store.heartbeats()
+    assert len(heartbeats) == 3
+    assert {beat.run_id for beat in heartbeats} == {heartbeats[0].run_id}
+    assert {beat.interval_seconds for beat in heartbeats} == {30}
+
+
+def test_status_reports_a_qualified_day_from_recorded_evidence(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _seed_codex_source(home)
+    _use_fixture_home(monkeypatch, home)
+    data_dir = tmp_path / "state"
+    paths = resolve_state_paths(data_dir)
+    load_or_create_secret(paths)
+    store = EventStore(paths.database)
+    store.initialize()
+    now = datetime.now(UTC)
+    store.commit_ingest(
+        [
+            NormalizedEvent(
+                event_id="9" * 64,
+                agent="codex",
+                source_session_id="8" * 64,
+                project_key="7" * 64,
+                occurred_at=now,
+                record_kind="usage",
+                provenance="codex.token_count",
+            )
+        ],
+        [],
+        None,
+    )
+    for offset in range(3):
+        store.record_heartbeat(
+            WatchHeartbeat(
+                observed_at=now - timedelta(seconds=30 * offset),
+                run_id="6" * 64,
+                interval_seconds=30,
+            )
+        )
+    store.record_diagnostic_review(
+        DiagnosticReview(
+            reviewed_at=now, state_fingerprint="5" * 64, diagnostic_count=0
+        )
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["metermaid", "status", "--data-dir", str(data_dir)]
+    )
+
+    main()
+
+    out = capsys.readouterr().out
+    assert "Dogfood evidence" in out
+    assert "qualified" in out
+    assert now.date().isoformat() in out
+    assert "8" * 64 not in out
 
 
 @pytest.mark.parametrize("bad_value", ["0", "-1", "-10"])

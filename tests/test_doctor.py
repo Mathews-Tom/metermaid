@@ -10,6 +10,10 @@ from __future__ import annotations
 from dataclasses import fields
 from pathlib import Path
 
+import pytest
+from pytest import MonkeyPatch
+
+from metermaid.cli import main
 from metermaid.discover import PILOT_AGENTS, SourceRoot
 from metermaid.doctor import (
     AgentDiscovery,
@@ -17,6 +21,7 @@ from metermaid.doctor import (
     DoctorReport,
     build_doctor_report,
 )
+from metermaid.evidence import diagnostic_state_fingerprint
 from metermaid.ingest import ingest_once
 from metermaid.state import load_or_create_secret, resolve_state_paths
 from metermaid.store import EventStore
@@ -165,3 +170,73 @@ def test_doctor_dataclasses_carry_no_raw_path_or_free_text_field() -> None:
         "count",
     }
     assert {field.name for field in fields(DoctorReport)} == {"discovery", "counts"}
+
+
+def _run_doctor(
+    monkeypatch: MonkeyPatch, tmp_path: Path, *acknowledge: str
+) -> tuple[EventStore, str]:
+    home = tmp_path / "home"
+    sessions = home / ".codex" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "rollout-1.jsonl").write_bytes(_CODEX_PARSED_RECORD)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    data_dir = tmp_path / "state"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["metermaid", "doctor", "--data-dir", str(data_dir), *acknowledge],
+    )
+
+    main()
+
+    store = EventStore(resolve_state_paths(data_dir).database)
+    store.initialize()
+    return store, ""
+
+
+def test_doctor_records_no_review_without_the_acknowledge_flag(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store, _ = _run_doctor(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+
+    assert store.diagnostic_reviews() == []
+    assert "Parse outcomes" in out
+    assert "Acknowledged" not in out
+
+
+def test_doctor_acknowledgement_binds_to_the_displayed_state(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store, _ = _run_doctor(monkeypatch, tmp_path, "--acknowledge")
+    out = capsys.readouterr().out
+    secret = load_or_create_secret(resolve_state_paths(tmp_path / "state"))
+
+    reviews = store.diagnostic_reviews()
+    assert len(reviews) == 1
+    assert "Parse outcomes" in out
+    assert "Acknowledged" in out
+
+    displayed = build_doctor_report(store).counts
+    assert reviews[0].state_fingerprint == diagnostic_state_fingerprint(
+        secret, displayed
+    )
+    assert reviews[0].diagnostic_count == sum(row.count for row in displayed)
+
+
+def test_acknowledgement_does_not_carry_over_to_a_changed_state(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store, _ = _run_doctor(monkeypatch, tmp_path, "--acknowledge")
+    capsys.readouterr()
+    secret = load_or_create_secret(resolve_state_paths(tmp_path / "state"))
+    acknowledged = store.diagnostic_reviews()[0].state_fingerprint
+
+    widened = build_doctor_report(store).counts + (
+        DiscriminatorCount(
+            agent="omp", discriminator="model_usage", kind="unsupported", count=5
+        ),
+    )
+
+    assert diagnostic_state_fingerprint(secret, widened) != acknowledged
