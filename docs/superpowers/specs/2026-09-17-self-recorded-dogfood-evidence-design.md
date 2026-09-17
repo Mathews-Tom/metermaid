@@ -30,7 +30,8 @@ Schema version 6 adds two tables through the established additive, atomic migrat
 CREATE TABLE watch_heartbeats (
     observed_at TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
-    interval_seconds INTEGER NOT NULL
+    interval_seconds INTEGER NOT NULL,
+    poll_seconds INTEGER
 );
 
 CREATE TABLE diagnostic_reviews (
@@ -59,7 +60,7 @@ CREATE TABLE diagnostic_reviews (
 Each day in the window is labeled exactly one of:
 
 - **idle** — no tracked-agent events were observed. Genuine inactivity is not a failure; Sep 14 2026 is precisely this case.
-- **qualified** — events were observed, at least one acknowledged review exists for that day, and no gap between consecutive heartbeats exceeds the largest heartbeat interval recorded that day multiplied by a fixed tolerance factor.
+- **qualified** — events were observed, at least one acknowledged review exists for that day, and no gap between consecutive heartbeats exceeds the day's largest real poll period multiplied by a fixed tolerance factor. A poll's real period is its configured interval plus the ingest work that poll performed, which on a large corpus dominates the interval outright; judging continuity against the interval alone mislabels a healthy watcher as incomplete. A heartbeat recorded before durations were measured carries no duration and falls back to its interval, which is all the evidence it holds.
 - **incomplete** — events were observed but the review or continuity condition above is unmet.
 
 The label is computed from stored evidence only. Nothing infers watcher state from a process snapshot taken after the fact, and no label is derived from the absence of a ledger row.
@@ -86,6 +87,8 @@ Tests must prove:
 - A day with events, an acknowledged review, and dense heartbeats is qualified.
 - The same day without a review is incomplete.
 - A heartbeat gap beyond tolerance makes an otherwise-reviewed day incomplete.
+- A run whose polls each take far longer than the configured interval stays qualified, while a genuinely stopped watcher with equally slow polls is incomplete.
+- A database holding heartbeats without durations upgrades in place, keeping those rows and their null duration.
 - A day with no events is idle regardless of heartbeats or reviews.
 - `doctor` records no review without the flag and exactly one with it, printing the same table either way.
 - `watch` records a heartbeat per poll, and repeated writes for one second stay idempotent.
