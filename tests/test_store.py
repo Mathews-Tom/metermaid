@@ -10,7 +10,13 @@ from pathlib import Path
 import pytest
 from pytest import MonkeyPatch
 
-from metermaid.domain import FileWatermark, NormalizedEvent, ParseOutcome
+from metermaid.domain import (
+    DiagnosticReview,
+    FileWatermark,
+    NormalizedEvent,
+    ParseOutcome,
+    WatchHeartbeat,
+)
 from metermaid.store import SCHEMA_VERSION, EventStore, open_store
 
 
@@ -57,7 +63,61 @@ def test_initialize_creates_wal_schema(tmp_path: Path) -> None:
         "ingest_diagnostics",
         "ingest_diagnostic_records",
         "legacy_snapshots",
+        "watch_heartbeats",
+        "diagnostic_reviews",
     } <= tables
+
+
+def _heartbeat(
+    moment: datetime, *, run_id: str = "1" * 64, interval: int = 30
+) -> WatchHeartbeat:
+    return WatchHeartbeat(observed_at=moment, run_id=run_id, interval_seconds=interval)
+
+
+def test_heartbeat_is_idempotent_within_one_second(tmp_path: Path) -> None:
+    store = EventStore(tmp_path / "metermaid.sqlite3")
+    store.initialize()
+    moment = datetime(2026, 9, 17, 10, 0, 0, tzinfo=UTC)
+
+    assert store.record_heartbeat(_heartbeat(moment)) is True
+    assert (
+        store.record_heartbeat(_heartbeat(moment.replace(microsecond=400000))) is False
+    )
+
+    recorded = store.heartbeats()
+    assert [beat.observed_at for beat in recorded] == [moment]
+    assert recorded[0].interval_seconds == 30
+
+
+def test_acknowledged_review_round_trips_its_fingerprint(tmp_path: Path) -> None:
+    store = EventStore(tmp_path / "metermaid.sqlite3")
+    store.initialize()
+    review = DiagnosticReview(
+        reviewed_at=datetime(2026, 9, 17, 11, 30, tzinfo=UTC),
+        state_fingerprint="2" * 64,
+        diagnostic_count=7,
+    )
+
+    assert store.record_diagnostic_review(review) is True
+
+    assert store.diagnostic_reviews() == [review]
+
+
+def test_upgrade_to_evidence_schema_preserves_existing_rows(tmp_path: Path) -> None:
+    database = tmp_path / "metermaid.sqlite3"
+    store = EventStore(database)
+    store.initialize()
+    store.commit_ingest([_event()], [], _watermark())
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE watch_heartbeats")
+        connection.execute("DROP TABLE diagnostic_reviews")
+        connection.execute("PRAGMA user_version = 5")
+
+    EventStore(database).initialize()
+
+    assert store.events() == [_event()]
+    assert store.watermark("d" * 64) == _watermark()
+    assert store.heartbeats() == []
 
 
 def test_initialize_rolls_back_interrupted_v1_migration(
@@ -106,7 +166,7 @@ def test_atomic_migration_skips_a_step_another_initializer_applied(
             EventStore._apply_atomic_migration(
                 connection, target_version=5, apply=EventStore._apply_v5_schema
             )
-            == 5
+            == SCHEMA_VERSION
         )
 
     assert store.diagnostics() == [outcome]

@@ -6,18 +6,26 @@ import sqlite3
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
-from .domain import FileWatermark, LegacySnapshot, NormalizedEvent, ParseOutcome
+from .domain import (
+    DiagnosticReview,
+    FileWatermark,
+    LegacySnapshot,
+    NormalizedEvent,
+    ParseOutcome,
+    WatchHeartbeat,
+)
 from .state import load_or_create_secret, resolve_state_paths
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 """v1 adds ``events``/``file_watermarks``/``ingest_diagnostics`` plus an
 empty ``legacy_snapshots`` placeholder table; v2 gives that placeholder its
 mapped-value columns for the M4 legacy importer; v3 records per-file adapter
 semantic revisions; v4 persisted replay progress; v5 deduplicates diagnostics
-by opaque record identity."""
+by opaque record identity; v6 records self-observed dogfood evidence as
+``watch_heartbeats`` and ``diagnostic_reviews``."""
 
 
 def open_store(data_dir: Path | None = None) -> EventStore:
@@ -80,6 +88,10 @@ class EventStore:
             if current < 5:
                 current = self._apply_atomic_migration(
                     connection, target_version=5, apply=self._apply_v5_schema
+                )
+            if current < 6:
+                current = self._apply_atomic_migration(
+                    connection, target_version=6, apply=self._apply_v6_schema
                 )
 
     def commit_ingest(
@@ -226,6 +238,80 @@ class EventStore:
             adapter_revision=row[5],
             diagnostic_rebuild=bool(row[6]),
         )
+
+    def record_heartbeat(self, heartbeat: WatchHeartbeat) -> bool:
+        """Record one watcher poll, idempotent within a single second.
+
+        The second-resolution primary key bounds growth: a poll loop
+        cannot accumulate unbounded rows for the same instant, and a
+        repeated write for an already-recorded second is ignored rather
+        than duplicated.
+        """
+        with self._connection() as connection:
+            with connection:
+                inserted = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO watch_heartbeats (
+                        observed_at, run_id, interval_seconds
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (
+                        _heartbeat_key(heartbeat.observed_at),
+                        heartbeat.run_id,
+                        heartbeat.interval_seconds,
+                    ),
+                ).rowcount
+        return inserted == 1
+
+    def heartbeats(self) -> list[WatchHeartbeat]:
+        """Return recorded watcher polls in observation order."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT observed_at, run_id, interval_seconds
+                   FROM watch_heartbeats ORDER BY observed_at"""
+            ).fetchall()
+        return [
+            WatchHeartbeat(
+                observed_at=datetime.fromisoformat(row[0]),
+                run_id=row[1],
+                interval_seconds=row[2],
+            )
+            for row in rows
+        ]
+
+    def record_diagnostic_review(self, review: DiagnosticReview) -> bool:
+        """Record one acknowledged review of a displayed diagnostic state."""
+        with self._connection() as connection:
+            with connection:
+                inserted = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO diagnostic_reviews (
+                        reviewed_at, state_fingerprint, diagnostic_count
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (
+                        _heartbeat_key(review.reviewed_at),
+                        review.state_fingerprint,
+                        review.diagnostic_count,
+                    ),
+                ).rowcount
+        return inserted == 1
+
+    def diagnostic_reviews(self) -> list[DiagnosticReview]:
+        """Return acknowledged diagnostic reviews in review order."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT reviewed_at, state_fingerprint, diagnostic_count
+                   FROM diagnostic_reviews ORDER BY reviewed_at"""
+            ).fetchall()
+        return [
+            DiagnosticReview(
+                reviewed_at=datetime.fromisoformat(row[0]),
+                state_fingerprint=row[1],
+                diagnostic_count=row[2],
+            )
+            for row in rows
+        ]
 
     def commit_legacy_import(
         self, snapshots: Iterable[LegacySnapshot]
@@ -444,6 +530,32 @@ class EventStore:
         connection.execute("DELETE FROM ingest_diagnostics")
         connection.execute("UPDATE file_watermarks SET diagnostic_rebuild = 1")
 
+    @staticmethod
+    def _apply_v6_schema(connection: sqlite3.Connection) -> None:
+        """Add self-observed dogfood evidence tables without touching data.
+
+        Purely additive: no existing table, column, index, or row is read
+        or modified, so an upgraded database keeps every event, watermark,
+        and diagnostic it already held.
+        """
+        for statement in (
+            """
+            CREATE TABLE IF NOT EXISTS watch_heartbeats (
+                observed_at TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                interval_seconds INTEGER NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS diagnostic_reviews (
+                reviewed_at TEXT PRIMARY KEY,
+                state_fingerprint TEXT NOT NULL,
+                diagnostic_count INTEGER NOT NULL
+            )
+            """,
+        ):
+            connection.execute(statement)
+
 
 def _event_values(event: NormalizedEvent) -> tuple[object, ...]:
     return (
@@ -487,6 +599,11 @@ def _event_from_row(row: sqlite3.Row) -> NormalizedEvent:
         safe_tool_category=row["safe_tool_category"],
         provenance=row["provenance"],
     )
+
+
+def _heartbeat_key(moment: datetime) -> str:
+    """Render an aware-UTC instant as its second-resolution storage key."""
+    return moment.astimezone(UTC).replace(microsecond=0).isoformat()
 
 
 def _legacy_values(row: LegacySnapshot) -> tuple[object, ...]:
