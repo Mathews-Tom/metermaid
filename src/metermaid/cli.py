@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from rich.console import Console
@@ -19,6 +19,7 @@ from .evidence import (
     EvidenceCoverage,
     build_evidence_coverage,
     diagnostic_state_fingerprint,
+    policy_effective_date,
 )
 from .export_v1 import build_export, export_preview, write_export
 from .ingest import IngestSummary, ingest_once
@@ -222,8 +223,14 @@ def _cmd_status(args: argparse.Namespace) -> None:
     store, _secret = _open_v1_store(args)
     events = store.events()
     diagnostics = store.diagnostics()
+    heartbeats = store.heartbeats()
+    reviews = store.diagnostic_reviews()
+    runs = store.watch_runs()
     sessions = {event.source_session_id for event in events}
     diagnostic_total = sum(outcome.count for outcome in diagnostics)
+    today = datetime.now(UTC).date()
+    activation = store.continuity_policy_activated_at()
+    effective_date = policy_effective_date(activation)
 
     console.print(
         f"Store: [bold]{len(events)}[/bold] events, "
@@ -233,33 +240,44 @@ def _cmd_status(args: argparse.Namespace) -> None:
     console.print(_discovery_table(build_doctor_report(store)))
     coverage = build_evidence_coverage(
         events,
-        store.heartbeats(),
-        store.diagnostic_reviews(),
-        store.watch_runs(),
+        heartbeats,
+        reviews,
+        runs,
         window_days=EVIDENCE_WINDOW_DAYS,
-        until=datetime.now(UTC).date(),
+        until=today,
     )
     console.print(
-        f"Evidence: [green]{coverage.qualified_days}[/green] qualified, "
+        f"Live evidence: [green]{coverage.qualified_days}[/green] qualified, "
         f"[yellow]{coverage.incomplete_days}[/yellow] incomplete, "
         f"[dim]{coverage.idle_days}[/dim] idle "
-        f"(last {EVIDENCE_WINDOW_DAYS} days)"
+        f"(last {EVIDENCE_WINDOW_DAYS} UTC days)"
     )
     console.print(_evidence_table(coverage))
-    verdict = (
-        "[green]criteria would pass[/green]"
-        if coverage.closeout_passes
-        else "[yellow]criteria would not pass[/yellow]"
+
+    completed = build_evidence_coverage(
+        events,
+        heartbeats,
+        reviews,
+        runs,
+        window_days=EVIDENCE_WINDOW_DAYS,
+        until=today - timedelta(days=1),
     )
-    console.print(
-        "[yellow]Exploratory continuity policy:[/yellow] at most one "
-        "event-free gap of 30 minutes or less per active UTC day. "
-        "This output is not a precommitted closeout."
-    )
-    console.print(
-        f"Exploratory criteria: no incomplete day and at least "
-        f"{MIN_QUALIFIED_DAYS} qualified days — {verdict}"
-    )
+    if completed.closeout_passes_from(effective_date):
+        verdict = "[green]criteria pass[/green]"
+    else:
+        verdict = "[yellow]criteria do not pass[/yellow]"
+    if completed.days[0].day >= effective_date:
+        console.print(
+            f"Precommitted closeout ({completed.days[0].day.isoformat()} to "
+            f"{completed.days[-1].day.isoformat()} UTC): no incomplete day and at "
+            f"least {MIN_QUALIFIED_DAYS} qualified days — {verdict}"
+        )
+    else:
+        recorded_days = sum(day.day >= effective_date for day in completed.days)
+        console.print(
+            f"Precommitted closeout begins {effective_date.isoformat()} UTC: "
+            f"{recorded_days} of {EVIDENCE_WINDOW_DAYS} completed days recorded"
+        )
 
 
 def _cmd_doctor(args: argparse.Namespace) -> None:

@@ -148,9 +148,22 @@ class EvidenceCoverage:
         """Report whether this window satisfies the fixed closeout criterion."""
         return self.incomplete_days == 0 and self.qualified_days >= MIN_QUALIFIED_DAYS
 
+    def closeout_passes_from(self, effective_date: date) -> bool:
+        """Report whether this complete window qualifies after policy activation."""
+        return (
+            bool(self.days)
+            and self.days[0].day >= effective_date
+            and self.closeout_passes
+        )
+
 
 def _day_of(moment: datetime) -> date:
     return moment.astimezone(UTC).date()
+
+
+def policy_effective_date(activated_at: datetime) -> date:
+    """Start formal accounting on the full UTC day after activation."""
+    return _day_of(activated_at) + timedelta(days=1)
 
 
 def _real_period(heartbeat: WatchHeartbeat) -> int:

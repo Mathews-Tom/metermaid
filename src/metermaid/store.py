@@ -20,7 +20,7 @@ from .domain import (
 )
 from .state import load_or_create_secret, resolve_state_paths
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 """v1 adds ``events``/``file_watermarks``/``ingest_diagnostics`` plus an
 empty ``legacy_snapshots`` placeholder table; v2 gives that placeholder its
 mapped-value columns for the M4 legacy importer; v3 records per-file adapter
@@ -28,7 +28,8 @@ semantic revisions; v4 persisted replay progress; v5 deduplicates diagnostics
 by opaque record identity; v6 records self-observed dogfood evidence as
 ``watch_heartbeats`` and ``diagnostic_reviews``; v7 records how long each
 watcher poll took so continuity is judged against the real period; v8 records
-the boot instant observed at each watcher-run start."""
+the boot instant observed at each watcher-run start; v9 persists continuity
+policy activation before a formal closeout period begins."""
 
 
 def open_store(data_dir: Path | None = None) -> EventStore:
@@ -103,6 +104,10 @@ class EventStore:
             if current < 8:
                 current = self._apply_atomic_migration(
                     connection, target_version=8, apply=self._apply_v8_schema
+                )
+            if current < 9:
+                self._apply_atomic_migration(
+                    connection, target_version=9, apply=self._apply_v9_schema
                 )
 
     def commit_ingest(
@@ -309,6 +314,17 @@ class EventStore:
             )
             for row in rows
         ]
+
+    def continuity_policy_activated_at(self) -> datetime:
+        """Return the immutable UTC activation instant for policy version 1."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT activated_at FROM continuity_policy_activations
+                   WHERE policy_version = 1"""
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Metermaid continuity policy activation is missing")
+        return datetime.fromisoformat(row[0])
 
     def heartbeats(self) -> list[WatchHeartbeat]:
         """Return recorded watcher polls in observation order."""
@@ -633,6 +649,26 @@ class EventStore:
                 booted_at TEXT
             )
             """
+        )
+
+    @staticmethod
+    def _apply_v9_schema(connection: sqlite3.Connection) -> None:
+        """Persist one activation instant before formal continuity accounting."""
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS continuity_policy_activations (
+                policy_version INTEGER PRIMARY KEY CHECK (policy_version = 1),
+                activated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO continuity_policy_activations (
+                policy_version, activated_at
+            ) VALUES (1, ?)
+            """,
+            (datetime.now(UTC).isoformat(),),
         )
 
     @staticmethod

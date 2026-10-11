@@ -301,7 +301,8 @@ def test_status_reports_a_qualified_day_from_recorded_evidence(
     assert "Dogfood evidence" in out
     assert "qualified" in out
     assert now.date().isoformat() in out
-    assert "Exploratory continuity policy" in out
+    assert "Precommitted closeout begins" in out
+    assert "0 of 14 completed days recorded" in out
     assert "8" * 64 not in out
 
 

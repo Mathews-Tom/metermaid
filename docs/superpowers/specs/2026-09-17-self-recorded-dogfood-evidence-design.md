@@ -71,7 +71,7 @@ An accepted interval remains visible in `status` as an inactive gap. It does not
 
 `doctor` is unchanged by default. With `--acknowledge` it prints the identical table and then records one review row bound to that exact displayed state. Acknowledging is therefore impossible without having produced the state being acknowledged, and a later change in diagnostics yields a different fingerprint rather than inheriting an old acknowledgement.
 
-`status` gains one coverage section over a trailing window. Per day it reports event count, heartbeat count, first and last heartbeat, longest heartbeat gap, acknowledged-review count, accepted inactive-gap count, and a status label.
+`status` gains a live coverage section over a trailing window. Per day it reports event count, heartbeat count, first and last heartbeat, longest heartbeat gap, acknowledged-review count, accepted inactive-gap count, and a status label. Its formal verdict uses a separate trailing window whose final date is the preceding completed UTC day.
 
 ## Coverage criterion
 
@@ -85,17 +85,15 @@ The label is computed from stored evidence only. Nothing infers watcher state fr
 
 ## Precommitted closeout rule
 
-A window closes out as passing when it contains **no incomplete day** and at least **ten qualified days**. Zero incomplete days is the substantive assertion: no unexplained watcher gap, and no active day without an acknowledged review. The ten-day floor prevents a window from passing while mostly idle, while tolerating a few genuinely inactive days such as a weekend.
+A formal window closes out as passing when it contains **no incomplete day** and at least **ten qualified days**. Zero incomplete days is the substantive assertion: no unexplained watcher gap, and no active day without an acknowledged review. The ten-day floor prevents a window from passing while mostly idle, while tolerating a few genuinely inactive days such as a weekend.
 
-This rule is fixed in code before a window opens, and `status` prints whether the current window would pass. Labeling days without a predetermined passing rule would leave the verdict to be argued from the numbers after seeing them — the same ambiguity that let two previous periods die in dispute rather than on evidence.
+Schema version 9 records one immutable UTC activation timestamp for continuity policy version 1. Formal evidence starts on the following full UTC date, so the activation date itself cannot be counted from a partial day. `status` shows live trailing evidence for operational visibility, but its formal verdict uses the trailing fourteen completed UTC days only. A candidate window is ineligible until every day in it starts on or after the persisted effective date.
 
-## Policy activation
-
-The 30-minute rule re-evaluates Sep 27–Oct 4 as **exploratory** evidence because the policy was chosen after Oct 4's gap was observed. `status` must state that this result is not a precommitted closeout. The next policy version must persist an activation date before counting a new window as a closeout candidate; it may not be introduced after a result is known and then silently reclassify that result.
+The 30-minute rule re-evaluates Sep 27–Oct 10 as **exploratory** evidence because the policy was chosen after Oct 4's gap was observed. Its result is useful operational evidence, not a precommitted closeout. The persisted activation row creates the boundary for the next formal window; it cannot be inserted after that window's result is known and silently reclassify it.
 
 ## Architecture
 
-Computation stays pure and separate from persistence. The store owns the three evidence tables and their idempotent writes and reads. A separate module derives the fingerprint and builds the per-day coverage from events, heartbeats, watcher runs, and reviews, so the criterion is testable without a database or a clock.
+Computation stays pure and separate from persistence. The store owns the evidence tables, immutable policy activation, and their idempotent writes and reads. A separate module derives the fingerprint and builds the per-day coverage from events, heartbeats, watcher runs, and reviews, so the criterion is testable without a database or a clock.
 
 ## Alternatives rejected
 
@@ -126,6 +124,8 @@ Tests must prove:
 - A 30-minute-or-less gap containing no normalized event is qualified once and displayed as an inactive gap.
 - A 30-minute-plus-one-second gap, a second same-day inactive gap, and a gap containing a normalized event are incomplete.
 - Exploratory status never reports its re-evaluated window as a precommitted closeout.
+- A version 8 database upgrades once to persist one immutable continuity-policy activation timestamp.
+- A formal verdict excludes the partial current UTC day and remains ineligible while its completed-day window contains any pre-activation date.
 - A day with no events is idle regardless of heartbeats or reviews.
 - `doctor` records no review without the flag and exactly one with it, printing the same table either way.
 - `watch` records a heartbeat per poll, and repeated writes for one second stay idempotent.
@@ -135,4 +135,4 @@ Tests must prove:
 
 ## Consequence for the blocked closeout
 
-The Sep 2–15 extension stays blocked and no disposition is fabricated for it. Once this mechanism ships, a fresh period can be measured from recorded evidence, and its closeout becomes a readout rather than a recollection.
+The Sep 2–15 extension stays blocked and no disposition is fabricated for it. Sep 27–Oct 10 remains exploratory. Once policy activation is persisted, a fresh period can be measured from recorded evidence, and its closeout becomes a readout rather than a recollection.

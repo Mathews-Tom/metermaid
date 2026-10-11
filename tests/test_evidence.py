@@ -26,6 +26,7 @@ from metermaid.evidence import (
     EvidenceCoverage,
     build_evidence_coverage,
     diagnostic_state_fingerprint,
+    policy_effective_date,
 )
 
 _SECRET = b"s" * 32
@@ -365,6 +366,20 @@ def test_a_single_incomplete_day_fails_the_closeout() -> None:
 
     assert coverage.incomplete_days == 1
     assert coverage.closeout_passes is False
+
+
+def test_closeout_requires_an_entire_window_after_policy_activation() -> None:
+    coverage = _window(["qualified"] * MIN_QUALIFIED_DAYS + ["idle"] * 4)
+    first_day = coverage.days[0].day
+
+    assert coverage.closeout_passes_from(first_day) is True
+    assert coverage.closeout_passes_from(first_day + timedelta(days=1)) is False
+
+
+def test_policy_effective_date_is_the_next_full_utc_day() -> None:
+    activated_at = datetime(2026, 9, 17, 23, 59, tzinfo=UTC)
+
+    assert policy_effective_date(activated_at) == date(2026, 9, 18)
 
 
 def test_a_mostly_idle_window_fails_the_closeout() -> None:

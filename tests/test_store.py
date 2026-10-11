@@ -67,6 +67,7 @@ def test_initialize_creates_wal_schema(tmp_path: Path) -> None:
         "watch_heartbeats",
         "diagnostic_reviews",
         "watch_runs",
+        "continuity_policy_activations",
     } <= tables
 
 
@@ -206,6 +207,26 @@ def test_upgrade_to_reboot_evidence_keeps_existing_heartbeats(tmp_path: Path) ->
 
     assert store.heartbeats() == [_heartbeat(moment, poll_seconds=42)]
     assert store.watch_runs() == []
+
+
+def test_upgrade_to_policy_activation_preserves_existing_evidence(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "metermaid.sqlite3"
+    store = EventStore(database)
+    store.initialize()
+    store.commit_ingest([_event()], [], _watermark())
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE continuity_policy_activations")
+        connection.execute("PRAGMA user_version = 8")
+
+    EventStore(database).initialize()
+
+    activation = store.continuity_policy_activated_at()
+    assert activation.tzinfo is UTC
+    assert store.events() == [_event()]
+    EventStore(database).initialize()
+    assert store.continuity_policy_activated_at() == activation
 
 
 def test_initialize_rolls_back_interrupted_v1_migration(
