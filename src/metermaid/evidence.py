@@ -36,18 +36,35 @@ from datetime import UTC, date, datetime, timedelta
 from itertools import pairwise
 from typing import Literal, Protocol
 
-from .domain import DiagnosticReview, NormalizedEvent, WatchHeartbeat
+from .domain import DiagnosticReview, NormalizedEvent, WatchHeartbeat, WatchRun
 from .state import event_identifier
 
 GAP_TOLERANCE = 2
-"""Multiple of a day's real poll period tolerated between heartbeats.
+"""Multiple of a gap's own adjoining poll periods tolerated between beats.
 
 A poll's real period is the configured interval plus the ingest work that
 poll performed, which on a large corpus dominates the interval outright.
-Doubling that measured period absorbs a slow pass or a busy machine while
-still exposing a watcher that actually stopped. Heartbeats predating the
-measured duration fall back to the interval alone, which is all the
-evidence they carry.
+Each gap is judged against the slower of the two heartbeats bounding it,
+never against the day's widest period: one slow pass must not silently
+excuse an unrelated interruption hours later. Doubling that period
+absorbs a busy machine while still exposing a watcher that stopped.
+Heartbeats predating the measured duration fall back to the interval
+alone, which is all the evidence they carry.
+"""
+
+MAX_INACTIVE_GAP_SECONDS = 30 * 60
+"""Maximum duration of one event-free, tolerated gap on an active UTC day."""
+
+MAX_TOLERATED_INACTIVE_GAPS_PER_DAY = 1
+"""Event-free gaps an active UTC day may tolerate under the exploratory rule."""
+
+MIN_QUALIFIED_DAYS = 10
+"""Qualified days a 14-day window needs before a closeout may pass.
+
+Zero incomplete days is the real assertion: no unexplained watcher gap
+and no active day without an acknowledged review. This floor additionally
+stops a window from passing while mostly idle, while still tolerating a
+few genuinely inactive days such as a weekend.
 """
 
 DayStatus = Literal["idle", "qualified", "incomplete"]
@@ -104,6 +121,7 @@ class EvidenceDay:
     heartbeat_count: int
     review_count: int
     longest_gap_seconds: int | None
+    tolerated_inactive_gap_count: int
     status: DayStatus
 
 
@@ -125,24 +143,92 @@ class EvidenceCoverage:
     def idle_days(self) -> int:
         return sum(day.status == "idle" for day in self.days)
 
+    @property
+    def closeout_passes(self) -> bool:
+        """Report whether this window satisfies the fixed closeout criterion."""
+        return self.incomplete_days == 0 and self.qualified_days >= MIN_QUALIFIED_DAYS
+
 
 def _day_of(moment: datetime) -> date:
     return moment.astimezone(UTC).date()
 
 
-def _longest_gap_seconds(moments: Sequence[datetime]) -> int | None:
-    if len(moments) < 2:
+def _real_period(heartbeat: WatchHeartbeat) -> int:
+    """Return a poll's interval plus the ingest work it performed."""
+    return heartbeat.interval_seconds + (heartbeat.poll_seconds or 0)
+
+
+def _ordered(heartbeats: Sequence[WatchHeartbeat]) -> list[WatchHeartbeat]:
+    return sorted(heartbeats, key=lambda heartbeat: heartbeat.observed_at)
+
+
+def _longest_gap_seconds(heartbeats: Sequence[WatchHeartbeat]) -> int | None:
+    if len(heartbeats) < 2:
         return None
-    ordered = sorted(moment.astimezone(UTC) for moment in moments)
+    ordered = _ordered(heartbeats)
     return max(
-        int((later - earlier).total_seconds()) for earlier, later in pairwise(ordered)
+        int((later.observed_at - earlier.observed_at).total_seconds())
+        for earlier, later in pairwise(ordered)
     )
+
+
+def _is_verified_reboot_boundary(
+    earlier: WatchHeartbeat,
+    later: WatchHeartbeat,
+    runs_by_id: dict[str, WatchRun],
+) -> bool:
+    """Report whether a widened cross-run gap contains the later boot."""
+
+    if earlier.run_id == later.run_id:
+        return False
+    resumed = runs_by_id.get(later.run_id)
+    if resumed is None or resumed.booted_at is None:
+        return False
+    return (
+        earlier.observed_at
+        < resumed.booted_at
+        <= resumed.started_at
+        <= later.observed_at
+    )
+
+
+def _tolerated_inactive_gap_count(
+    events: Sequence[NormalizedEvent],
+    heartbeats: Sequence[WatchHeartbeat],
+    runs_by_id: dict[str, WatchRun],
+) -> int | None:
+    """Return accepted inactive gaps, or ``None`` for unexplained continuity.
+
+    Every over-tolerance gap remains represented by its two heartbeat
+    endpoints. The exploratory rule accepts only one bounded interval per
+    active UTC day and only when no normalized event occurred after the
+    prior heartbeat and by the resumed heartbeat.
+    """
+
+    accepted = 0
+    for earlier, later in pairwise(_ordered(heartbeats)):
+        gap = (later.observed_at - earlier.observed_at).total_seconds()
+        tolerated = GAP_TOLERANCE * max(_real_period(earlier), _real_period(later))
+        if gap <= tolerated or _is_verified_reboot_boundary(earlier, later, runs_by_id):
+            continue
+        if gap > MAX_INACTIVE_GAP_SECONDS:
+            return None
+        if any(
+            earlier.observed_at < event.occurred_at <= later.observed_at
+            for event in events
+        ):
+            return None
+        accepted += 1
+        if accepted > MAX_TOLERATED_INACTIVE_GAPS_PER_DAY:
+            return None
+    return accepted
 
 
 def build_evidence_coverage(
     events: Sequence[NormalizedEvent],
     heartbeats: Sequence[WatchHeartbeat],
     reviews: Sequence[DiagnosticReview],
+    runs: Sequence[WatchRun] = (),
     *,
     window_days: int,
     until: date,
@@ -157,10 +243,12 @@ def build_evidence_coverage(
     included = frozenset(window)
 
     event_counts: dict[date, int] = {}
+    events_by_day: dict[date, list[NormalizedEvent]] = {}
     for event in events:
         day = _day_of(event.occurred_at)
         if day in included:
             event_counts[day] = event_counts.get(day, 0) + 1
+            events_by_day.setdefault(day, []).append(event)
 
     beats: dict[date, list[WatchHeartbeat]] = {}
     for heartbeat in heartbeats:
@@ -174,14 +262,16 @@ def build_evidence_coverage(
         if day in included:
             review_counts[day] = review_counts.get(day, 0) + 1
 
+    runs_by_id = {run.run_id: run for run in runs}
+
     days: list[EvidenceDay] = []
     for day in window:
         event_count = event_counts.get(day, 0)
+        day_events = events_by_day.get(day, [])
         day_beats = beats.get(day, [])
         review_count = review_counts.get(day, 0)
-        longest_gap = _longest_gap_seconds(
-            [heartbeat.observed_at for heartbeat in day_beats]
-        )
+        longest_gap = _longest_gap_seconds(day_beats)
+        inactive_gaps = _tolerated_inactive_gap_count(day_events, day_beats, runs_by_id)
         days.append(
             EvidenceDay(
                 day=day,
@@ -189,11 +279,14 @@ def build_evidence_coverage(
                 heartbeat_count=len(day_beats),
                 review_count=review_count,
                 longest_gap_seconds=longest_gap,
+                tolerated_inactive_gap_count=(
+                    0 if inactive_gaps is None else inactive_gaps
+                ),
                 status=_status(
                     event_count=event_count,
                     review_count=review_count,
                     heartbeats=day_beats,
-                    longest_gap_seconds=longest_gap,
+                    inactive_gaps=inactive_gaps,
                 ),
             )
         )
@@ -205,16 +298,10 @@ def _status(
     event_count: int,
     review_count: int,
     heartbeats: Sequence[WatchHeartbeat],
-    longest_gap_seconds: int | None,
+    inactive_gaps: int | None,
 ) -> DayStatus:
     if event_count == 0:
         return "idle"
-    if review_count == 0 or not heartbeats:
-        return "incomplete"
-    tolerated = GAP_TOLERANCE * max(
-        heartbeat.interval_seconds + (heartbeat.poll_seconds or 0)
-        for heartbeat in heartbeats
-    )
-    if longest_gap_seconds is not None and longest_gap_seconds > tolerated:
+    if review_count == 0 or not heartbeats or inactive_gaps is None:
         return "incomplete"
     return "qualified"

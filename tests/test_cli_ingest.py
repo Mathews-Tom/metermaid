@@ -10,7 +10,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from metermaid.cli import _positive_interval, _watch_loop, main
-from metermaid.domain import DiagnosticReview, NormalizedEvent, WatchHeartbeat
+from metermaid.domain import DiagnosticReview, NormalizedEvent, WatchHeartbeat, WatchRun
 from metermaid.state import load_or_create_secret, resolve_state_paths
 from metermaid.store import EventStore
 
@@ -231,6 +231,9 @@ def test_watch_loop_records_one_heartbeat_per_poll(
         if polls["count"] >= 3:
             raise KeyboardInterrupt()
 
+    monkeypatch.setattr(
+        "metermaid.cli.host_booted_at", lambda: base - timedelta(minutes=5)
+    )
     _watch_loop(store, secret, 30, sleep=_sleep, now=lambda: next(ticks))
 
     heartbeats = store.heartbeats()
@@ -238,6 +241,13 @@ def test_watch_loop_records_one_heartbeat_per_poll(
     assert {beat.run_id for beat in heartbeats} == {heartbeats[0].run_id}
     assert {beat.interval_seconds for beat in heartbeats} == {30}
     assert {beat.poll_seconds for beat in heartbeats} == {30}
+    assert store.watch_runs() == [
+        WatchRun(
+            run_id=heartbeats[0].run_id,
+            started_at=base,
+            booted_at=base - timedelta(minutes=5),
+        )
+    ]
 
 
 def test_status_reports_a_qualified_day_from_recorded_evidence(
@@ -286,11 +296,12 @@ def test_status_reports_a_qualified_day_from_recorded_evidence(
     )
 
     main()
-
     out = capsys.readouterr().out
+
     assert "Dogfood evidence" in out
     assert "qualified" in out
     assert now.date().isoformat() in out
+    assert "Exploratory continuity policy" in out
     assert "8" * 64 not in out
 
 

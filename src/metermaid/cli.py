@@ -13,8 +13,9 @@ from rich.table import Table
 
 from .discover import PILOT_AGENTS
 from .doctor import DoctorReport, build_doctor_report
-from .domain import DiagnosticReview, WatchHeartbeat
+from .domain import DiagnosticReview, WatchHeartbeat, WatchRun
 from .evidence import (
+    MIN_QUALIFIED_DAYS,
     EvidenceCoverage,
     build_evidence_coverage,
     diagnostic_state_fingerprint,
@@ -29,6 +30,7 @@ from .legacy_v1 import (
     import_legacy_snapshots,
 )
 from .models import DEFAULT_INTERVAL, SESSIONS_DIR
+from .platform import host_booted_at
 from .report_v1 import GroupAggregate, ObservedReport, ReportFilter, build_report
 from .state import load_or_create_secret, opaque_identifier, resolve_state_paths
 from .store import EventStore
@@ -136,7 +138,15 @@ def _watch_loop(
     """
     wait = sleep if sleep is not None else time.sleep
     clock = now if now is not None else lambda: datetime.now(UTC)
-    run_id = _watch_run_id(secret, clock())
+    run_started_at = clock()
+    run_id = _watch_run_id(secret, run_started_at)
+    store.record_watch_run(
+        WatchRun(
+            run_id=run_id,
+            started_at=run_started_at,
+            booted_at=host_booted_at(),
+        )
+    )
     try:
         while True:
             started_at = clock()
@@ -187,6 +197,7 @@ def _evidence_table(coverage: EvidenceCoverage) -> Table:
     t.add_column("Heartbeats", justify="right")
     t.add_column("Longest gap (s)", justify="right")
     t.add_column("Reviews", justify="right")
+    t.add_column("Inactive gaps", justify="right")
     styles = {
         "qualified": "[green]qualified[/green]",
         "incomplete": "[yellow]incomplete[/yellow]",
@@ -200,9 +211,10 @@ def _evidence_table(coverage: EvidenceCoverage) -> Table:
             str(day.heartbeat_count),
             _format_optional_int(day.longest_gap_seconds),
             str(day.review_count),
+            str(day.tolerated_inactive_gap_count),
         )
     if not coverage.days:
-        t.add_row("[dim]none[/dim]", "", "", "", "", "")
+        t.add_row("[dim]none[/dim]", "", "", "", "", "", "")
     return t
 
 
@@ -223,6 +235,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
         events,
         store.heartbeats(),
         store.diagnostic_reviews(),
+        store.watch_runs(),
         window_days=EVIDENCE_WINDOW_DAYS,
         until=datetime.now(UTC).date(),
     )
@@ -233,6 +246,20 @@ def _cmd_status(args: argparse.Namespace) -> None:
         f"(last {EVIDENCE_WINDOW_DAYS} days)"
     )
     console.print(_evidence_table(coverage))
+    verdict = (
+        "[green]criteria would pass[/green]"
+        if coverage.closeout_passes
+        else "[yellow]criteria would not pass[/yellow]"
+    )
+    console.print(
+        "[yellow]Exploratory continuity policy:[/yellow] at most one "
+        "event-free gap of 30 minutes or less per active UTC day. "
+        "This output is not a precommitted closeout."
+    )
+    console.print(
+        f"Exploratory criteria: no incomplete day and at least "
+        f"{MIN_QUALIFIED_DAYS} qualified days — {verdict}"
+    )
 
 
 def _cmd_doctor(args: argparse.Namespace) -> None:

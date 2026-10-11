@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved design. This replaces the hand-written operational record that blocked two consecutive dogfood periods. It does not reopen M5's `ITERATE` disposition, authorize M6, expand the stable command surface, or change how events are ingested, aggregated, or exported.
+Approved design. This replaces the hand-written operational record that blocked two consecutive dogfood periods. Version 9 adds an exploratory, bounded inactive-gap derivation over the existing evidence; it does not reopen M5's `ITERATE` disposition, authorize M6, expand the stable command surface, or change how events are ingested, aggregated, or exported.
 
 ## Problem
 
@@ -24,7 +24,7 @@ Coverage is reported through the existing `status` command. The stable seven-com
 
 ## Schema
 
-Schema version 6 adds two tables through the established additive, atomic migration path. No existing table, column, index, or row is altered.
+Schema version 6 added two tables through the established additive, atomic migration path. Version 7 added the measured `poll_seconds` column. Version 8 adds watcher-run boot evidence. Version 9 stores no new data: it derives bounded inactive gaps from the existing heartbeat and normalized-event timestamps. No existing table, column, index, or row is altered.
 
 ```sql
 CREATE TABLE watch_heartbeats (
@@ -32,6 +32,12 @@ CREATE TABLE watch_heartbeats (
     run_id TEXT NOT NULL,
     interval_seconds INTEGER NOT NULL,
     poll_seconds INTEGER
+);
+
+CREATE TABLE watch_runs (
+    run_id TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    booted_at TEXT
 );
 
 CREATE TABLE diagnostic_reviews (
@@ -45,7 +51,19 @@ CREATE TABLE diagnostic_reviews (
 
 `run_id` is derived through the machine-local secret. It distinguishes an uninterrupted run from a restart without persisting a process identifier, executable path, hostname, or user name.
 
-`state_fingerprint` is derived through the machine-local secret over the sorted `(agent, discriminator, kind, count)` rows the acknowledged `doctor` invocation displayed. Both tables hold only local runtime facts: no source record, prompt, tool argument, path, project name, or session identifier.
+`state_fingerprint` is derived through the machine-local secret over the sorted `(agent, discriminator, kind, count)` rows the acknowledged `doctor` invocation displayed. These tables hold only local runtime facts: no source record, prompt, tool argument, path, project name, or session identifier.
+
+`watch_runs.booted_at` is the host's measured UTC boot instant at watcher startup when the platform supplies one; its absence supplies no restart exemption. A continuity gap that exceeds its normal tolerance is accepted only when it crosses into a different watcher run and that later run's recorded boot instant is after the earlier heartbeat and no later than the later heartbeat. This exempts a verified system restart while preserving failure for sleep, an ordinary process restart, a restart on a platform without boot evidence, and a second restart after the same boot.
+
+## Bounded inactive gaps
+
+Version 9 preserves every heartbeat pair but adds a transparent derived disposition for a gap that is not normal cadence or a verified reboot:
+
+- at most one such gap may be accepted on an active UTC day;
+- its duration must be no more than 30 minutes;
+- no normalized event may have an `occurred_at` timestamp in `(previous heartbeat, next heartbeat]`.
+
+An accepted interval remains visible in `status` as an inactive gap. It does not delete the interruption, invent a heartbeat, or claim that the watcher ran during it. A gap with tracked activity, a second same-day inactive gap, or a gap over 30 minutes remains unexplained and makes the day incomplete.
 
 ## Behavior
 
@@ -53,21 +71,31 @@ CREATE TABLE diagnostic_reviews (
 
 `doctor` is unchanged by default. With `--acknowledge` it prints the identical table and then records one review row bound to that exact displayed state. Acknowledging is therefore impossible without having produced the state being acknowledged, and a later change in diagnostics yields a different fingerprint rather than inheriting an old acknowledgement.
 
-`status` gains one coverage section over a trailing window. Per day it reports event count, heartbeat count, first and last heartbeat, longest heartbeat gap, acknowledged-review count, and a status label.
+`status` gains one coverage section over a trailing window. Per day it reports event count, heartbeat count, first and last heartbeat, longest heartbeat gap, acknowledged-review count, accepted inactive-gap count, and a status label.
 
 ## Coverage criterion
 
 Each day in the window is labeled exactly one of:
 
 - **idle** — no tracked-agent events were observed. Genuine inactivity is not a failure; Sep 14 2026 is precisely this case.
-- **qualified** — events were observed, at least one acknowledged review exists for that day, and no gap between consecutive heartbeats exceeds the day's largest real poll period multiplied by a fixed tolerance factor. A poll's real period is its configured interval plus the ingest work that poll performed, which on a large corpus dominates the interval outright; judging continuity against the interval alone mislabels a healthy watcher as incomplete. A heartbeat recorded before durations were measured carries no duration and falls back to its interval, which is all the evidence it holds.
+- **qualified** — events were observed, at least one acknowledged review exists for that day, and every heartbeat gap is normal cadence, a verified system-restart boundary, or one accepted bounded inactive gap. A poll's real period is its configured interval plus the ingest work that poll performed, which on a large corpus dominates the interval outright; judging continuity against the interval alone mislabels a healthy watcher as incomplete. Each normal gap is judged against its own adjoining polls rather than the day's widest period, so one slow pass cannot silently excuse an unrelated interruption hours later. A heartbeat recorded before durations were measured carries no duration and falls back to its interval, which is all the evidence it holds.
 - **incomplete** — events were observed but the review or continuity condition above is unmet.
 
 The label is computed from stored evidence only. Nothing infers watcher state from a process snapshot taken after the fact, and no label is derived from the absence of a ledger row.
 
+## Precommitted closeout rule
+
+A window closes out as passing when it contains **no incomplete day** and at least **ten qualified days**. Zero incomplete days is the substantive assertion: no unexplained watcher gap, and no active day without an acknowledged review. The ten-day floor prevents a window from passing while mostly idle, while tolerating a few genuinely inactive days such as a weekend.
+
+This rule is fixed in code before a window opens, and `status` prints whether the current window would pass. Labeling days without a predetermined passing rule would leave the verdict to be argued from the numbers after seeing them — the same ambiguity that let two previous periods die in dispute rather than on evidence.
+
+## Policy activation
+
+The 30-minute rule re-evaluates Sep 27–Oct 4 as **exploratory** evidence because the policy was chosen after Oct 4's gap was observed. `status` must state that this result is not a precommitted closeout. The next policy version must persist an activation date before counting a new window as a closeout candidate; it may not be introduced after a result is known and then silently reclassify that result.
+
 ## Architecture
 
-Computation stays pure and separate from persistence. The store owns only the two tables and their idempotent writes and reads. A separate module derives the fingerprint and builds the per-day coverage from events, heartbeats, and reviews, so the criterion is testable without a database or a clock.
+Computation stays pure and separate from persistence. The store owns the three evidence tables and their idempotent writes and reads. A separate module derives the fingerprint and builds the per-day coverage from events, heartbeats, watcher runs, and reviews, so the criterion is testable without a database or a clock.
 
 ## Alternatives rejected
 
@@ -79,6 +107,10 @@ Computation stays pure and separate from persistence. The store owns only the tw
 
 **Retrospective attestation for the missing dates.** Recalled attestation is exactly the weakness that blocked M5; it would certify a period from memory.
 
+**Any watcher-run boundary.** Exempting every restart would let a user stop the foreground watcher and hide an unexplained collection gap. Only a boot instant recorded by the later watcher run can prove that the host rebooted between its adjacent heartbeats.
+
+**Deleting a heartbeat around a gap.** Removing either endpoint would create the appearance of continuity by destroying the observation that proves the interruption. The bounded rule keeps both facts and makes an explicit, testable disposition instead.
+
 ## Verification
 
 Tests must prove:
@@ -87,8 +119,13 @@ Tests must prove:
 - A day with events, an acknowledged review, and dense heartbeats is qualified.
 - The same day without a review is incomplete.
 - A heartbeat gap beyond tolerance makes an otherwise-reviewed day incomplete.
+- A verified host-reboot boundary between two watcher runs keeps an otherwise-reviewed day qualified.
+- A process-only restart and a sleep gap remain incomplete.
 - A run whose polls each take far longer than the configured interval stays qualified, while a genuinely stopped watcher with equally slow polls is incomplete.
-- A database holding heartbeats without durations upgrades in place, keeping those rows and their null duration.
+- A version 7 database upgrades in place with its legacy heartbeats preserved and no fabricated reboot evidence.
+- A 30-minute-or-less gap containing no normalized event is qualified once and displayed as an inactive gap.
+- A 30-minute-plus-one-second gap, a second same-day inactive gap, and a gap containing a normalized event are incomplete.
+- Exploratory status never reports its re-evaluated window as a precommitted closeout.
 - A day with no events is idle regardless of heartbeats or reviews.
 - `doctor` records no review without the flag and exactly one with it, printing the same table either way.
 - `watch` records a heartbeat per poll, and repeated writes for one second stay idempotent.

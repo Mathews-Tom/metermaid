@@ -16,17 +16,19 @@ from .domain import (
     NormalizedEvent,
     ParseOutcome,
     WatchHeartbeat,
+    WatchRun,
 )
 from .state import load_or_create_secret, resolve_state_paths
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 """v1 adds ``events``/``file_watermarks``/``ingest_diagnostics`` plus an
 empty ``legacy_snapshots`` placeholder table; v2 gives that placeholder its
 mapped-value columns for the M4 legacy importer; v3 records per-file adapter
 semantic revisions; v4 persisted replay progress; v5 deduplicates diagnostics
 by opaque record identity; v6 records self-observed dogfood evidence as
 ``watch_heartbeats`` and ``diagnostic_reviews``; v7 records how long each
-watcher poll took so continuity is judged against the real period."""
+watcher poll took so continuity is judged against the real period; v8 records
+the boot instant observed at each watcher-run start."""
 
 
 def open_store(data_dir: Path | None = None) -> EventStore:
@@ -97,6 +99,10 @@ class EventStore:
             if current < 7:
                 current = self._apply_atomic_migration(
                     connection, target_version=7, apply=self._apply_v7_schema
+                )
+            if current < 8:
+                current = self._apply_atomic_migration(
+                    connection, target_version=8, apply=self._apply_v8_schema
                 )
 
     def commit_ingest(
@@ -268,6 +274,41 @@ class EventStore:
                     ),
                 ).rowcount
         return inserted == 1
+
+    def record_watch_run(self, run: WatchRun) -> bool:
+        """Record one watcher run and its optional host-boot evidence."""
+        with self._connection() as connection:
+            with connection:
+                inserted = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO watch_runs (run_id, started_at, booted_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        run.run_id,
+                        _heartbeat_key(run.started_at),
+                        None
+                        if run.booted_at is None
+                        else _heartbeat_key(run.booted_at),
+                    ),
+                ).rowcount
+        return inserted == 1
+
+    def watch_runs(self) -> list[WatchRun]:
+        """Return watcher-run facts in chronological start order."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT run_id, started_at, booted_at
+                   FROM watch_runs ORDER BY started_at, run_id"""
+            ).fetchall()
+        return [
+            WatchRun(
+                run_id=row[0],
+                started_at=datetime.fromisoformat(row[1]),
+                booted_at=None if row[2] is None else datetime.fromisoformat(row[2]),
+            )
+            for row in rows
+        ]
 
     def heartbeats(self) -> list[WatchHeartbeat]:
         """Return recorded watcher polls in observation order."""
@@ -576,6 +617,23 @@ class EventStore:
             connection.execute(
                 "ALTER TABLE watch_heartbeats ADD COLUMN poll_seconds INTEGER"
             )
+
+    @staticmethod
+    def _apply_v8_schema(connection: sqlite3.Connection) -> None:
+        """Record optional boot evidence for new watcher runs.
+
+        Existing heartbeat history keeps no invented boot fact, so it remains
+        subject to the prior strict continuity rule after the upgrade.
+        """
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS watch_runs (
+                run_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                booted_at TEXT
+            )
+            """
+        )
 
     @staticmethod
     def _has_heartbeat_column(connection: sqlite3.Connection, column: str) -> bool:

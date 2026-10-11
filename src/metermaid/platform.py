@@ -4,7 +4,39 @@ from __future__ import annotations
 
 import os
 import platform as _platform
+import re
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
+
+_DARWIN_BOOT_TIME = re.compile(
+    r"\bsec = (?P<seconds>\d+), usec = (?P<microseconds>\d+)\b"
+)
+
+
+def host_booted_at() -> datetime | None:
+    """Return the current Darwin boot instant, or no evidence elsewhere.
+
+    A missing platform capability never becomes invented reboot evidence:
+    callers retain strict continuity handling when this returns ``None``.
+    A malformed Darwin response is an execution failure because accepting
+    a reboot without a measured boot instant would weaken that invariant.
+    """
+
+    if _platform.system() != "Darwin":
+        return None
+    result = subprocess.run(
+        ["sysctl", "-n", "kern.boottime"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    match = _DARWIN_BOOT_TIME.search(result.stdout)
+    if match is None:
+        raise RuntimeError("could not parse Darwin host boot time")
+    seconds = int(match["seconds"])
+    microseconds = int(match["microseconds"])
+    return datetime.fromtimestamp(seconds + microseconds / 1_000_000, UTC)
 
 
 def is_wsl() -> bool:
