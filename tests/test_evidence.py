@@ -465,6 +465,23 @@ def test_day_without_tracked_activity_is_idle_not_a_failure() -> None:
     assert coverage.incomplete_days == 0
 
 
+def test_idle_day_ignores_prior_date_activity_in_incoming_gap() -> None:
+    """Prior-date activity does not redefine an event-free UTC day as active."""
+    before = _MIDDAY.replace(hour=0) - timedelta(minutes=10)
+    after = before + timedelta(minutes=20)
+    heartbeats = [
+        WatchHeartbeat(observed_at=moment, run_id="4" * 64, interval_seconds=_INTERVAL)
+        for moment in (before, after)
+    ]
+
+    coverage = _coverage([_event(before + timedelta(seconds=1))], heartbeats, [])
+
+    assert coverage.days[0].status == "idle"
+    assert coverage.days[0].event_count == 0
+    assert coverage.days[0].longest_gap_seconds == 20 * 60
+    assert coverage.incomplete_days == 0
+
+
 def test_window_covers_every_requested_day_in_order() -> None:
     coverage = build_evidence_coverage(
         [_event()], _beats(2), [_review()], window_days=3, until=_DAY
