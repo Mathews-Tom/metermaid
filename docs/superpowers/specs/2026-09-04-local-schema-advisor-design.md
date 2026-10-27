@@ -44,6 +44,8 @@ timeout_seconds = 30
 
 `endpoint` must be an `http` URL whose hostname resolves syntactically to `127.0.0.1`, `localhost`, or `::1`, and whose path is exactly Ollama's `/api/generate`. The advisor rejects every other endpoint before opening a socket. `model` must be non-empty. `timeout_seconds` must be an integer in the closed interval 1–120.
 
+The configured model selector is control-plane configuration, not a source-derived model label. Transcript model values never enter a prompt or terminal row. The transport connects directly to loopback, including IPv4 for `localhost`, without proxy-environment routing or redirects.
+
 The normal package installation does not create this file, import advisor code, resolve a model, or open a socket.
 
 ## Architecture
@@ -82,9 +84,23 @@ The script sends one prompt per unique structural signature, never one prompt pe
 - `possible-usage-shape`
 - `needs-human-review`
 
-The Ollama call requests JSON output. The validator rejects non-JSON, extra fields, unrecognized categories, timeouts, non-2xx responses, and oversized responses. Every such failure terminates that signature with `needs-human-review`; it never invents a parser mapping or silently relabels a diagnostic.
+The Ollama call requests JSON output with thinking explicitly disabled (`think: false`); the approved local Gemma model otherwise exceeded the bounded inference deadline during the fixture-only smoke. The validator rejects non-JSON, extra fields, unrecognized categories, timeouts, non-2xx responses, and oversized responses. Every such failure terminates that signature with `needs-human-review`; it never invents a parser mapping or silently relabels a diagnostic.
 
 The terminal table shows only the aggregate signature identifier, agent, safe discriminator, count, and validated category. It prints no model rationale. The script creates no database row, cache, transcript copy, log, fixture, or export.
+
+## Developer invocation
+
+Create the explicit TOML opt-in above, then run from the source checkout:
+
+```bash
+uv run python scripts/schema_advisor.py --config /path/to/schema-advisor.toml
+```
+
+Without `--config`, the same script uses only the documented XDG/home location. It never creates a default configuration or enables itself. Missing, disabled, or invalid configuration exits nonzero before source discovery.
+
+The script scans complete newline-terminated records under the documented pilot-agent roots and reuses the existing pure adapters to select only `unsupported` outcomes. Supported and malformed records are not submitted. An incomplete trailing line waits for the next explicit invocation; there is no watcher, cache, checkpoint, retry loop, or advisor database. Adapter context uses an ephemeral secret, not a new or persisted Metermaid secret.
+
+Output is a tab-separated table containing only signature ID, agent, allowlisted discriminator, aggregate count, and category. A transport/response failure emits `needs-human-review` for that group and makes the process exit nonzero. Standard output is transient; no model rationale is retained. The source entrypoint disables bytecode writes while importing its modules.
 
 ## Human promotion gate
 
@@ -118,4 +134,4 @@ Tests must demonstrate:
 
 ## M5 status
 
-M5's Aug 17–30 dogfood period is complete and its `ITERATE` disposition is final. The Sep 2–15 process is an evidence-only extension for the corrected build. This advisor remains deferred until that extension concludes or a separately approved plan authorizes it.
+M5's Aug 17–30 dogfood period is complete and its `ITERATE` disposition remains final. The Sep 2–15 evidence-only extension closed as blocked; it is not retroactively certified. M5b merged in PR #28, and the separately recorded Oct 12–25 UTC formal candidate passes from stored evidence. The M6 design gate now authorizes this isolated developer aid under the unchanged local-only, value-free, no-persistence boundary.
