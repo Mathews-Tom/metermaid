@@ -21,8 +21,9 @@ A day is labeled exactly one of:
     failure, so an idle day never counts against coverage.
 ``qualified``
     Events were observed, at least one acknowledged review exists for
-    that day, and no gap between consecutive heartbeats exceeds the
-    largest interval recorded that day times :data:`GAP_TOLERANCE`.
+    that day, and every gap is normal cadence or has recorded reboot or
+    bounded inactivity evidence. Gaps crossing midnight belong to the
+    UTC day of their later heartbeat.
 ``incomplete``
     Events were observed but the review or continuity condition is
     unmet.
@@ -30,6 +31,7 @@ A day is labeled exactly one of:
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -176,12 +178,12 @@ def _ordered(heartbeats: Sequence[WatchHeartbeat]) -> list[WatchHeartbeat]:
 
 
 def _longest_gap_seconds(heartbeats: Sequence[WatchHeartbeat]) -> int | None:
+    """Return the longest gap in an already chronological heartbeat sequence."""
     if len(heartbeats) < 2:
         return None
-    ordered = _ordered(heartbeats)
     return max(
         int((later.observed_at - earlier.observed_at).total_seconds())
-        for earlier, later in pairwise(ordered)
+        for earlier, later in pairwise(heartbeats)
     )
 
 
@@ -206,29 +208,30 @@ def _is_verified_reboot_boundary(
 
 
 def _tolerated_inactive_gap_count(
-    events: Sequence[NormalizedEvent],
+    event_times: Sequence[datetime],
     heartbeats: Sequence[WatchHeartbeat],
     runs_by_id: dict[str, WatchRun],
 ) -> int | None:
     """Return accepted inactive gaps, or ``None`` for unexplained continuity.
 
-    Every over-tolerance gap remains represented by its two heartbeat
-    endpoints. The exploratory rule accepts only one bounded interval per
-    active UTC day and only when no normalized event occurred after the
-    prior heartbeat and by the resumed heartbeat.
+    Both sequences are chronological. Every over-tolerance gap remains
+    represented by its two heartbeat endpoints, including the predecessor
+    before a UTC day or window. The budget belongs to the later heartbeat's
+    day; the event lookup includes both sides of midnight.
     """
 
     accepted = 0
-    for earlier, later in pairwise(_ordered(heartbeats)):
+    for earlier, later in pairwise(heartbeats):
         gap = (later.observed_at - earlier.observed_at).total_seconds()
         tolerated = GAP_TOLERANCE * max(_real_period(earlier), _real_period(later))
         if gap <= tolerated or _is_verified_reboot_boundary(earlier, later, runs_by_id):
             continue
         if gap > MAX_INACTIVE_GAP_SECONDS:
             return None
-        if any(
-            earlier.observed_at < event.occurred_at <= later.observed_at
-            for event in events
+        next_event = bisect_right(event_times, earlier.observed_at)
+        if (
+            next_event < len(event_times)
+            and event_times[next_event] <= later.observed_at
         ):
             return None
         accepted += 1
@@ -255,19 +258,24 @@ def build_evidence_coverage(
     )
     included = frozenset(window)
 
+    event_times = sorted(event.occurred_at for event in events)
     event_counts: dict[date, int] = {}
-    events_by_day: dict[date, list[NormalizedEvent]] = {}
-    for event in events:
-        day = _day_of(event.occurred_at)
+    for moment in event_times:
+        day = _day_of(moment)
         if day in included:
             event_counts[day] = event_counts.get(day, 0) + 1
-            events_by_day.setdefault(day, []).append(event)
 
     beats: dict[date, list[WatchHeartbeat]] = {}
-    for heartbeat in heartbeats:
+    heartbeat_counts: dict[date, int] = {}
+    previous: WatchHeartbeat | None = None
+    for heartbeat in _ordered(heartbeats):
         day = _day_of(heartbeat.observed_at)
         if day in included:
-            beats.setdefault(day, []).append(heartbeat)
+            if day not in beats:
+                beats[day] = [] if previous is None else [previous]
+            beats[day].append(heartbeat)
+            heartbeat_counts[day] = heartbeat_counts.get(day, 0) + 1
+        previous = heartbeat
 
     review_counts: dict[date, int] = {}
     for review in reviews:
@@ -280,16 +288,17 @@ def build_evidence_coverage(
     days: list[EvidenceDay] = []
     for day in window:
         event_count = event_counts.get(day, 0)
-        day_events = events_by_day.get(day, [])
         day_beats = beats.get(day, [])
         review_count = review_counts.get(day, 0)
         longest_gap = _longest_gap_seconds(day_beats)
-        inactive_gaps = _tolerated_inactive_gap_count(day_events, day_beats, runs_by_id)
+        inactive_gaps = _tolerated_inactive_gap_count(
+            event_times, day_beats, runs_by_id
+        )
         days.append(
             EvidenceDay(
                 day=day,
                 event_count=event_count,
-                heartbeat_count=len(day_beats),
+                heartbeat_count=heartbeat_counts.get(day, 0),
                 review_count=review_count,
                 longest_gap_seconds=longest_gap,
                 tolerated_inactive_gap_count=(

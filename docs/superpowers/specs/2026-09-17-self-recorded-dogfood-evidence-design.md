@@ -24,7 +24,7 @@ Coverage is reported through the existing `status` command. The stable seven-com
 
 ## Schema
 
-Schema version 6 added two tables through the established additive, atomic migration path. Version 7 added the measured `poll_seconds` column. Version 8 adds watcher-run boot evidence. Version 9 stores no new data: it derives bounded inactive gaps from the existing heartbeat and normalized-event timestamps. No existing table, column, index, or row is altered.
+Schema version 6 added two tables through the established additive, atomic migration path. Version 7 added the measured `poll_seconds` column. Version 8 adds watcher-run boot evidence. Version 9 adds `continuity_policy_activations` and persists one immutable continuity-policy activation timestamp. Bounded inactive gaps remain derived at read time from the existing heartbeat and normalized-event timestamps; they add no stored gap rows or changes to historical evidence.
 
 ```sql
 CREATE TABLE watch_heartbeats (
@@ -45,6 +45,11 @@ CREATE TABLE diagnostic_reviews (
     state_fingerprint TEXT NOT NULL,
     diagnostic_count INTEGER NOT NULL
 );
+
+CREATE TABLE continuity_policy_activations (
+    policy_version INTEGER PRIMARY KEY CHECK (policy_version = 1),
+    activated_at TEXT NOT NULL
+);
 ```
 
 `observed_at` and `reviewed_at` are aware-UTC timestamps at second resolution, so a poll loop cannot write unbounded duplicate rows for the same instant.
@@ -55,6 +60,8 @@ CREATE TABLE diagnostic_reviews (
 
 `watch_runs.booted_at` is the host's measured UTC boot instant at watcher startup when the platform supplies one; its absence supplies no restart exemption. A continuity gap that exceeds its normal tolerance is accepted only when it crosses into a different watcher run and that later run's recorded boot instant is after the earlier heartbeat and no later than the later heartbeat. This exempts a verified system restart while preserving failure for sleep, an ordinary process restart, a restart on a platform without boot evidence, and a second restart after the same boot.
 
+On Darwin, boot lookup invokes `/usr/sbin/sysctl` directly with a five-second timeout, independently of the terminal's `PATH`. Execution failures, timeouts, and malformed output remain explicit errors; they are not silently converted to absent boot evidence. Other platforms continue without a boot-based exemption.
+
 ## Bounded inactive gaps
 
 Version 9 preserves every heartbeat pair but adds a transparent derived disposition for a gap that is not normal cadence or a verified reboot:
@@ -64,6 +71,8 @@ Version 9 preserves every heartbeat pair but adds a transparent derived disposit
 - no normalized event may have an `occurred_at` timestamp in `(previous heartbeat, next heartbeat]`.
 
 An accepted interval remains visible in `status` as an inactive gap. It does not delete the interruption, invent a heartbeat, or claim that the watcher ran during it. A gap with tracked activity, a second same-day inactive gap, or a gap over 30 minutes remains unexplained and makes the day incomplete.
+
+Heartbeat pairs are evaluated chronologically across UTC midnight and window boundaries. Each gap, including its inactive-gap budget, belongs to the UTC day of its later heartbeat. The preceding heartbeat may be outside the displayed window, and the event check includes the full gap interval rather than only the later day's events. Daily heartbeat and event counts still include only observations on that UTC day.
 
 ## Behavior
 
@@ -123,6 +132,8 @@ Tests must prove:
 - A version 7 database upgrades in place with its legacy heartbeats preserved and no fabricated reboot evidence.
 - A 30-minute-or-less gap containing no normalized event is qualified once and displayed as an inactive gap.
 - A 30-minute-plus-one-second gap, a second same-day inactive gap, and a gap containing a normalized event are incomplete.
+- Cross-midnight gaps retain pre-window heartbeat and event context: a 40-minute interruption is incomplete; an event-free 30-minute gap is accepted once; an event on the preceding date still invalidates the gap; a second gap on the later date exceeds the same daily budget.
+- Verified reboot evidence remains valid across midnight, without inflating the later day's heartbeat count.
 - Exploratory status never reports its re-evaluated window as a precommitted closeout.
 - A version 8 database upgrades once to persist one immutable continuity-policy activation timestamp.
 - A formal verdict excludes the partial current UTC day and remains ineligible while its completed-day window contains any pre-activation date.

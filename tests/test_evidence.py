@@ -9,6 +9,7 @@ Both are pure, so no database or clock participates here.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -23,7 +24,9 @@ from metermaid.evidence import (
     GAP_TOLERANCE,
     MAX_INACTIVE_GAP_SECONDS,
     MIN_QUALIFIED_DAYS,
+    DayStatus,
     EvidenceCoverage,
+    EvidenceDay,
     build_evidence_coverage,
     diagnostic_state_fingerprint,
     policy_effective_date,
@@ -317,36 +320,93 @@ def test_second_event_free_gap_in_one_day_is_incomplete() -> None:
     assert coverage.days[0].tolerated_inactive_gap_count == 0
 
 
+@pytest.mark.parametrize(
+    ("gap_seconds", "event_in_gap", "second_gap", "expected", "accepted"),
+    [
+        (40 * 60, False, False, "incomplete", 0),
+        (MAX_INACTIVE_GAP_SECONDS, False, False, "qualified", 1),
+        (MAX_INACTIVE_GAP_SECONDS + 1, False, False, "incomplete", 0),
+        (20 * 60, True, False, "incomplete", 0),
+        (20 * 60, False, True, "incomplete", 0),
+    ],
+)
+def test_midnight_gap_uses_pre_window_heartbeat_and_event_context(
+    gap_seconds: int,
+    event_in_gap: bool,
+    second_gap: bool,
+    expected: DayStatus,
+    accepted: int,
+) -> None:
+    """A day retains its incoming gap without counting its predecessor twice."""
+    before = _MIDDAY.replace(hour=0) - timedelta(minutes=10)
+    after = before + timedelta(seconds=gap_seconds)
+    moments = [before, after, after + timedelta(seconds=60)]
+    if second_gap:
+        moments.append(after + timedelta(seconds=150))
+    heartbeats = [
+        WatchHeartbeat(observed_at=moment, run_id="4" * 64, interval_seconds=_INTERVAL)
+        for moment in reversed(moments)
+    ]
+    events = [_event(after + timedelta(seconds=30))]
+    if event_in_gap:
+        events.append(_event(before + timedelta(seconds=1), "7" * 64))
+
+    coverage = _coverage(events, heartbeats, [_review()])
+
+    day = coverage.days[0]
+    assert day.status == expected
+    assert day.longest_gap_seconds == gap_seconds
+    assert day.tolerated_inactive_gap_count == accepted
+    assert day.heartbeat_count == len(moments) - 1
+    assert day.event_count == 1
+
+
+def test_verified_reboot_across_midnight_preserves_qualification() -> None:
+    """Recorded boot evidence still exempts a cross-day interruption."""
+    before = _MIDDAY.replace(hour=0) - timedelta(minutes=20)
+    after = before + timedelta(minutes=45)
+    heartbeats = [
+        WatchHeartbeat(observed_at=before, run_id="4" * 64, interval_seconds=_INTERVAL),
+        WatchHeartbeat(observed_at=after, run_id="6" * 64, interval_seconds=_INTERVAL),
+    ]
+    resumed = _run(
+        "6" * 64,
+        started_at=after - timedelta(seconds=1),
+        booted_at=after - timedelta(minutes=5),
+    )
+
+    coverage = build_evidence_coverage(
+        [_event(before + timedelta(minutes=1)), _event(after, "7" * 64)],
+        heartbeats,
+        [_review(after)],
+        [resumed],
+        window_days=1,
+        until=_DAY,
+    )
+
+    assert coverage.days[0].status == "qualified"
+    assert coverage.days[0].heartbeat_count == 1
+    assert coverage.days[0].longest_gap_seconds == 45 * 60
+
+
 # --- precommitted closeout rule ---------------------------------------------
 
 
 def _window(statuses: list[str]) -> EvidenceCoverage:
-    """Build a window whose days land on the requested labels."""
-    events: list[NormalizedEvent] = []
-    heartbeats: list[WatchHeartbeat] = []
-    reviews: list[DiagnosticReview] = []
-    for offset, status in enumerate(statuses):
-        moment = _MIDDAY - timedelta(days=len(statuses) - 1 - offset)
-        if status == "idle":
-            continue
-        events.append(_event(moment, event_id=f"{offset:064d}"))
-        if status == "qualified":
-            reviews.append(_review(moment))
-            heartbeats.extend(
-                WatchHeartbeat(
-                    observed_at=moment + timedelta(seconds=_INTERVAL * tick),
-                    run_id="4" * 64,
-                    interval_seconds=_INTERVAL,
-                    poll_seconds=0,
-                )
-                for tick in range(3)
+    """Build coverage labels directly to isolate the closeout-count contract."""
+    return EvidenceCoverage(
+        days=tuple(
+            EvidenceDay(
+                day=_DAY - timedelta(days=len(statuses) - 1 - offset),
+                event_count=int(status != "idle"),
+                heartbeat_count=int(status == "qualified"),
+                review_count=int(status == "qualified"),
+                longest_gap_seconds=0 if status == "qualified" else None,
+                tolerated_inactive_gap_count=0,
+                status=cast(DayStatus, status),
             )
-    return build_evidence_coverage(
-        events,
-        heartbeats,
-        reviews,
-        window_days=len(statuses),
-        until=_DAY,
+            for offset, status in enumerate(statuses)
+        )
     )
 
 

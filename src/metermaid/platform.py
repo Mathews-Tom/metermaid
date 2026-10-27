@@ -19,17 +19,19 @@ def host_booted_at() -> datetime | None:
 
     A missing platform capability never becomes invented reboot evidence:
     callers retain strict continuity handling when this returns ``None``.
-    A malformed Darwin response is an execution failure because accepting
-    a reboot without a measured boot instant would weaken that invariant.
+    Darwin uses the system executable independently of the caller's PATH.
+    Lookup failures and malformed output remain explicit errors rather
+    than silently discarding a broken host capability.
     """
 
     if _platform.system() != "Darwin":
         return None
     result = subprocess.run(
-        ["sysctl", "-n", "kern.boottime"],
+        ["/usr/sbin/sysctl", "-n", "kern.boottime"],
         check=True,
         capture_output=True,
         text=True,
+        timeout=5,
     )
     match = _DARWIN_BOOT_TIME.search(result.stdout)
     if match is None:
