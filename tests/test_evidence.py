@@ -9,6 +9,7 @@ Both are pure, so no database or clock participates here.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -17,12 +18,18 @@ from metermaid.domain import (
     NormalizedEvent,
     ParseOutcome,
     WatchHeartbeat,
+    WatchRun,
 )
 from metermaid.evidence import (
     GAP_TOLERANCE,
+    MAX_INACTIVE_GAP_SECONDS,
+    MIN_QUALIFIED_DAYS,
+    DayStatus,
     EvidenceCoverage,
+    EvidenceDay,
     build_evidence_coverage,
     diagnostic_state_fingerprint,
+    policy_effective_date,
 )
 
 _SECRET = b"s" * 32
@@ -61,6 +68,15 @@ def _review(moment: datetime = _MIDDAY) -> DiagnosticReview:
     return DiagnosticReview(
         reviewed_at=moment, state_fingerprint="5" * 64, diagnostic_count=3
     )
+
+
+def _run(
+    run_id: str,
+    *,
+    started_at: datetime,
+    booted_at: datetime | None,
+) -> WatchRun:
+    return WatchRun(run_id=run_id, started_at=started_at, booted_at=booted_at)
 
 
 def _coverage(
@@ -132,6 +148,7 @@ def test_reviewed_and_continuously_watched_day_qualifies() -> None:
     assert day.status == "qualified"
     assert day.event_count == 1
     assert day.heartbeat_count == 4
+    assert day.tolerated_inactive_gap_count == 0
     assert day.review_count == 1
     assert coverage.qualified_days == 1
 
@@ -143,10 +160,14 @@ def test_active_day_without_an_acknowledged_review_is_incomplete() -> None:
     assert coverage.incomplete_days == 1
 
 
-def test_heartbeat_gap_beyond_tolerance_makes_a_reviewed_day_incomplete() -> None:
+def test_heartbeat_gap_with_tracked_activity_is_incomplete() -> None:
     interrupted = _beats(2, spacing=_INTERVAL * (GAP_TOLERANCE + 1))
 
-    coverage = _coverage([_event()], interrupted, [_review()])
+    coverage = _coverage(
+        [_event(), _event(_MIDDAY + timedelta(seconds=1), "7" * 64)],
+        interrupted,
+        [_review()],
+    )
 
     day = coverage.days[0]
     assert day.status == "incomplete"
@@ -171,22 +192,262 @@ def test_slow_ingest_pass_does_not_look_like_a_stopped_watcher() -> None:
     assert day.status == "qualified"
 
 
-def test_stopped_watcher_is_incomplete_even_with_slow_polls() -> None:
+def test_gap_longer_than_the_inactive_budget_is_incomplete() -> None:
     poll_seconds = _INTERVAL * 3
-    downtime = (_INTERVAL + poll_seconds) * GAP_TOLERANCE + 1
-    interrupted = _beats(2, spacing=downtime, poll_seconds=poll_seconds)
+    interrupted = _beats(
+        2,
+        spacing=MAX_INACTIVE_GAP_SECONDS + 1,
+        poll_seconds=poll_seconds,
+    )
 
     coverage = _coverage([_event()], interrupted, [_review()])
 
     assert coverage.days[0].status == "incomplete"
 
 
+def test_one_slow_pass_does_not_excuse_an_unrelated_interruption() -> None:
+    """Tolerance follows each gap's own polls, not the day's widest one.
+
+    A single slow pass early in the day must not silently license a
+    stoppage hours later, which a day-level maximum would have done.
+    """
+    slow = WatchHeartbeat(
+        observed_at=_MIDDAY,
+        run_id="4" * 64,
+        interval_seconds=_INTERVAL,
+        poll_seconds=_INTERVAL * 10,
+    )
+    fast_before = WatchHeartbeat(
+        observed_at=_MIDDAY + timedelta(seconds=_INTERVAL),
+        run_id="4" * 64,
+        interval_seconds=_INTERVAL,
+        poll_seconds=1,
+    )
+    fast_after = WatchHeartbeat(
+        observed_at=_MIDDAY
+        + timedelta(seconds=_INTERVAL + MAX_INACTIVE_GAP_SECONDS + 1),
+        run_id="4" * 64,
+        interval_seconds=_INTERVAL,
+        poll_seconds=1,
+    )
+
+    coverage = _coverage([_event()], [slow, fast_before, fast_after], [_review()])
+
+    assert coverage.days[0].status == "incomplete"
+
+
+def test_verified_reboot_gap_keeps_a_reviewed_day_qualified() -> None:
+    before = WatchHeartbeat(
+        observed_at=_MIDDAY,
+        run_id="4" * 64,
+        interval_seconds=_INTERVAL,
+        poll_seconds=0,
+    )
+    after = WatchHeartbeat(
+        observed_at=_MIDDAY + timedelta(seconds=_INTERVAL * 4),
+        run_id="6" * 64,
+        interval_seconds=_INTERVAL,
+        poll_seconds=0,
+    )
+    resumed = _run(
+        "6" * 64,
+        started_at=_MIDDAY + timedelta(seconds=_INTERVAL * 3),
+        booted_at=_MIDDAY + timedelta(seconds=_INTERVAL * 2),
+    )
+
+    coverage = build_evidence_coverage(
+        [_event()], [before, after], [_review()], [resumed], window_days=1, until=_DAY
+    )
+
+    assert coverage.days[0].status == "qualified"
+
+
+def test_process_restart_with_tracked_activity_in_gap_is_incomplete() -> None:
+    before = WatchHeartbeat(
+        observed_at=_MIDDAY,
+        run_id="4" * 64,
+        interval_seconds=_INTERVAL,
+        poll_seconds=0,
+    )
+    after = WatchHeartbeat(
+        observed_at=_MIDDAY + timedelta(seconds=_INTERVAL * 4),
+        run_id="6" * 64,
+        interval_seconds=_INTERVAL,
+        poll_seconds=0,
+    )
+    resumed = _run(
+        "6" * 64,
+        started_at=_MIDDAY + timedelta(seconds=_INTERVAL * 3),
+        booted_at=_MIDDAY - timedelta(seconds=1),
+    )
+
+    coverage = build_evidence_coverage(
+        [_event(), _event(_MIDDAY + timedelta(seconds=1), "7" * 64)],
+        [before, after],
+        [_review()],
+        [resumed],
+        window_days=1,
+        until=_DAY,
+    )
+
+    assert coverage.days[0].status == "incomplete"
+
+
 def test_heartbeat_without_a_measured_duration_falls_back_to_its_interval() -> None:
-    legacy = _beats(2, spacing=_INTERVAL * GAP_TOLERANCE + 1)
+    legacy = _beats(2, spacing=MAX_INACTIVE_GAP_SECONDS + 1)
 
     coverage = _coverage([_event()], legacy, [_review()])
 
     assert coverage.days[0].status == "incomplete"
+
+
+def test_one_event_free_gap_within_the_budget_is_qualified_and_visible() -> None:
+    interrupted = _beats(2, spacing=MAX_INACTIVE_GAP_SECONDS)
+
+    coverage = _coverage([_event()], interrupted, [_review()])
+
+    day = coverage.days[0]
+    assert day.status == "qualified"
+    assert day.tolerated_inactive_gap_count == 1
+
+
+def test_second_event_free_gap_in_one_day_is_incomplete() -> None:
+    interrupted = _beats(3, spacing=MAX_INACTIVE_GAP_SECONDS)
+
+    coverage = _coverage([_event()], interrupted, [_review()])
+
+    assert coverage.days[0].status == "incomplete"
+    assert coverage.days[0].tolerated_inactive_gap_count == 0
+
+
+@pytest.mark.parametrize(
+    ("gap_seconds", "event_in_gap", "second_gap", "expected", "accepted"),
+    [
+        (40 * 60, False, False, "incomplete", 0),
+        (MAX_INACTIVE_GAP_SECONDS, False, False, "qualified", 1),
+        (MAX_INACTIVE_GAP_SECONDS + 1, False, False, "incomplete", 0),
+        (20 * 60, True, False, "incomplete", 0),
+        (20 * 60, False, True, "incomplete", 0),
+    ],
+)
+def test_midnight_gap_uses_pre_window_heartbeat_and_event_context(
+    gap_seconds: int,
+    event_in_gap: bool,
+    second_gap: bool,
+    expected: DayStatus,
+    accepted: int,
+) -> None:
+    """A day retains its incoming gap without counting its predecessor twice."""
+    before = _MIDDAY.replace(hour=0) - timedelta(minutes=10)
+    after = before + timedelta(seconds=gap_seconds)
+    moments = [before, after, after + timedelta(seconds=60)]
+    if second_gap:
+        moments.append(after + timedelta(seconds=150))
+    heartbeats = [
+        WatchHeartbeat(observed_at=moment, run_id="4" * 64, interval_seconds=_INTERVAL)
+        for moment in reversed(moments)
+    ]
+    events = [_event(after + timedelta(seconds=30))]
+    if event_in_gap:
+        events.append(_event(before + timedelta(seconds=1), "7" * 64))
+
+    coverage = _coverage(events, heartbeats, [_review()])
+
+    day = coverage.days[0]
+    assert day.status == expected
+    assert day.longest_gap_seconds == gap_seconds
+    assert day.tolerated_inactive_gap_count == accepted
+    assert day.heartbeat_count == len(moments) - 1
+    assert day.event_count == 1
+
+
+def test_verified_reboot_across_midnight_preserves_qualification() -> None:
+    """Recorded boot evidence still exempts a cross-day interruption."""
+    before = _MIDDAY.replace(hour=0) - timedelta(minutes=20)
+    after = before + timedelta(minutes=45)
+    heartbeats = [
+        WatchHeartbeat(observed_at=before, run_id="4" * 64, interval_seconds=_INTERVAL),
+        WatchHeartbeat(observed_at=after, run_id="6" * 64, interval_seconds=_INTERVAL),
+    ]
+    resumed = _run(
+        "6" * 64,
+        started_at=after - timedelta(seconds=1),
+        booted_at=after - timedelta(minutes=5),
+    )
+
+    coverage = build_evidence_coverage(
+        [_event(before + timedelta(minutes=1)), _event(after, "7" * 64)],
+        heartbeats,
+        [_review(after)],
+        [resumed],
+        window_days=1,
+        until=_DAY,
+    )
+
+    assert coverage.days[0].status == "qualified"
+    assert coverage.days[0].heartbeat_count == 1
+    assert coverage.days[0].longest_gap_seconds == 45 * 60
+
+
+# --- precommitted closeout rule ---------------------------------------------
+
+
+def _window(statuses: list[str]) -> EvidenceCoverage:
+    """Build coverage labels directly to isolate the closeout-count contract."""
+    return EvidenceCoverage(
+        days=tuple(
+            EvidenceDay(
+                day=_DAY - timedelta(days=len(statuses) - 1 - offset),
+                event_count=int(status != "idle"),
+                heartbeat_count=int(status == "qualified"),
+                review_count=int(status == "qualified"),
+                longest_gap_seconds=0 if status == "qualified" else None,
+                tolerated_inactive_gap_count=0,
+                status=cast(DayStatus, status),
+            )
+            for offset, status in enumerate(statuses)
+        )
+    )
+
+
+def test_closeout_passes_with_no_incomplete_day_and_enough_qualified_days() -> None:
+    coverage = _window(["qualified"] * MIN_QUALIFIED_DAYS + ["idle"] * 4)
+
+    assert coverage.qualified_days == MIN_QUALIFIED_DAYS
+    assert coverage.incomplete_days == 0
+    assert coverage.idle_days == 4
+    assert coverage.closeout_passes is True
+
+
+def test_a_single_incomplete_day_fails_the_closeout() -> None:
+    coverage = _window(
+        ["qualified"] * MIN_QUALIFIED_DAYS + ["incomplete"] + ["idle"] * 3
+    )
+
+    assert coverage.incomplete_days == 1
+    assert coverage.closeout_passes is False
+
+
+def test_closeout_requires_an_entire_window_after_policy_activation() -> None:
+    coverage = _window(["qualified"] * MIN_QUALIFIED_DAYS + ["idle"] * 4)
+    first_day = coverage.days[0].day
+
+    assert coverage.closeout_passes_from(first_day) is True
+    assert coverage.closeout_passes_from(first_day + timedelta(days=1)) is False
+
+
+def test_policy_effective_date_is_the_next_full_utc_day() -> None:
+    activated_at = datetime(2026, 9, 17, 23, 59, tzinfo=UTC)
+
+    assert policy_effective_date(activated_at) == date(2026, 9, 18)
+
+
+def test_a_mostly_idle_window_fails_the_closeout() -> None:
+    coverage = _window(["qualified"] * (MIN_QUALIFIED_DAYS - 1) + ["idle"] * 5)
+
+    assert coverage.incomplete_days == 0
+    assert coverage.qualified_days < MIN_QUALIFIED_DAYS
+    assert coverage.closeout_passes is False
 
 
 def test_active_day_without_any_heartbeat_is_incomplete() -> None:
@@ -201,6 +462,23 @@ def test_day_without_tracked_activity_is_idle_not_a_failure() -> None:
     day = coverage.days[0]
     assert day.status == "idle"
     assert coverage.idle_days == 1
+    assert coverage.incomplete_days == 0
+
+
+def test_idle_day_ignores_prior_date_activity_in_incoming_gap() -> None:
+    """Prior-date activity does not redefine an event-free UTC day as active."""
+    before = _MIDDAY.replace(hour=0) - timedelta(minutes=10)
+    after = before + timedelta(minutes=20)
+    heartbeats = [
+        WatchHeartbeat(observed_at=moment, run_id="4" * 64, interval_seconds=_INTERVAL)
+        for moment in (before, after)
+    ]
+
+    coverage = _coverage([_event(before + timedelta(seconds=1))], heartbeats, [])
+
+    assert coverage.days[0].status == "idle"
+    assert coverage.days[0].event_count == 0
+    assert coverage.days[0].longest_gap_seconds == 20 * 60
     assert coverage.incomplete_days == 0
 
 

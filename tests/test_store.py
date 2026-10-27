@@ -16,6 +16,7 @@ from metermaid.domain import (
     NormalizedEvent,
     ParseOutcome,
     WatchHeartbeat,
+    WatchRun,
 )
 from metermaid.store import SCHEMA_VERSION, EventStore, open_store
 
@@ -65,6 +66,8 @@ def test_initialize_creates_wal_schema(tmp_path: Path) -> None:
         "legacy_snapshots",
         "watch_heartbeats",
         "diagnostic_reviews",
+        "watch_runs",
+        "continuity_policy_activations",
     } <= tables
 
 
@@ -83,6 +86,15 @@ def _heartbeat(
     )
 
 
+def _watch_run(
+    started_at: datetime,
+    *,
+    run_id: str = "2" * 64,
+    booted_at: datetime | None = None,
+) -> WatchRun:
+    return WatchRun(run_id=run_id, started_at=started_at, booted_at=booted_at)
+
+
 def test_heartbeat_is_idempotent_within_one_second(tmp_path: Path) -> None:
     store = EventStore(tmp_path / "metermaid.sqlite3")
     store.initialize()
@@ -96,6 +108,17 @@ def test_heartbeat_is_idempotent_within_one_second(tmp_path: Path) -> None:
     recorded = store.heartbeats()
     assert [beat.observed_at for beat in recorded] == [moment]
     assert recorded[0].interval_seconds == 30
+
+
+def test_watch_run_round_trips_boot_evidence(tmp_path: Path) -> None:
+    store = EventStore(tmp_path / "metermaid.sqlite3")
+    store.initialize()
+    started_at = datetime(2026, 9, 17, 10, 0, tzinfo=UTC)
+    run = _watch_run(started_at, booted_at=started_at.replace(hour=9))
+
+    assert store.record_watch_run(run) is True
+    assert store.record_watch_run(run) is False
+    assert store.watch_runs() == [run]
 
 
 def test_acknowledged_review_round_trips_its_fingerprint(tmp_path: Path) -> None:
@@ -168,6 +191,42 @@ def test_upgrade_keeps_a_heartbeat_recorded_before_durations_existed(
     recorded = store.heartbeats()
     assert [beat.observed_at for beat in recorded] == [moment]
     assert recorded[0].poll_seconds is None
+
+
+def test_upgrade_to_reboot_evidence_keeps_existing_heartbeats(tmp_path: Path) -> None:
+    database = tmp_path / "metermaid.sqlite3"
+    store = EventStore(database)
+    store.initialize()
+    moment = datetime(2026, 9, 17, 10, 0, 0, tzinfo=UTC)
+    store.record_heartbeat(_heartbeat(moment, poll_seconds=42))
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE watch_runs")
+        connection.execute("PRAGMA user_version = 7")
+
+    EventStore(database).initialize()
+
+    assert store.heartbeats() == [_heartbeat(moment, poll_seconds=42)]
+    assert store.watch_runs() == []
+
+
+def test_upgrade_to_policy_activation_preserves_existing_evidence(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "metermaid.sqlite3"
+    store = EventStore(database)
+    store.initialize()
+    store.commit_ingest([_event()], [], _watermark())
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE continuity_policy_activations")
+        connection.execute("PRAGMA user_version = 8")
+
+    EventStore(database).initialize()
+
+    activation = store.continuity_policy_activated_at()
+    assert activation.tzinfo is UTC
+    assert store.events() == [_event()]
+    EventStore(database).initialize()
+    assert store.continuity_policy_activated_at() == activation
 
 
 def test_initialize_rolls_back_interrupted_v1_migration(

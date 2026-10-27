@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from rich.console import Console
@@ -13,11 +13,13 @@ from rich.table import Table
 
 from .discover import PILOT_AGENTS
 from .doctor import DoctorReport, build_doctor_report
-from .domain import DiagnosticReview, WatchHeartbeat
+from .domain import DiagnosticReview, WatchHeartbeat, WatchRun
 from .evidence import (
+    MIN_QUALIFIED_DAYS,
     EvidenceCoverage,
     build_evidence_coverage,
     diagnostic_state_fingerprint,
+    policy_effective_date,
 )
 from .export_v1 import build_export, export_preview, write_export
 from .ingest import IngestSummary, ingest_once
@@ -29,6 +31,7 @@ from .legacy_v1 import (
     import_legacy_snapshots,
 )
 from .models import DEFAULT_INTERVAL, SESSIONS_DIR
+from .platform import host_booted_at
 from .report_v1 import GroupAggregate, ObservedReport, ReportFilter, build_report
 from .state import load_or_create_secret, opaque_identifier, resolve_state_paths
 from .store import EventStore
@@ -136,7 +139,15 @@ def _watch_loop(
     """
     wait = sleep if sleep is not None else time.sleep
     clock = now if now is not None else lambda: datetime.now(UTC)
-    run_id = _watch_run_id(secret, clock())
+    run_started_at = clock()
+    run_id = _watch_run_id(secret, run_started_at)
+    store.record_watch_run(
+        WatchRun(
+            run_id=run_id,
+            started_at=run_started_at,
+            booted_at=host_booted_at(),
+        )
+    )
     try:
         while True:
             started_at = clock()
@@ -187,6 +198,7 @@ def _evidence_table(coverage: EvidenceCoverage) -> Table:
     t.add_column("Heartbeats", justify="right")
     t.add_column("Longest gap (s)", justify="right")
     t.add_column("Reviews", justify="right")
+    t.add_column("Inactive gaps", justify="right")
     styles = {
         "qualified": "[green]qualified[/green]",
         "incomplete": "[yellow]incomplete[/yellow]",
@@ -200,9 +212,10 @@ def _evidence_table(coverage: EvidenceCoverage) -> Table:
             str(day.heartbeat_count),
             _format_optional_int(day.longest_gap_seconds),
             str(day.review_count),
+            str(day.tolerated_inactive_gap_count),
         )
     if not coverage.days:
-        t.add_row("[dim]none[/dim]", "", "", "", "", "")
+        t.add_row("[dim]none[/dim]", "", "", "", "", "", "")
     return t
 
 
@@ -210,8 +223,14 @@ def _cmd_status(args: argparse.Namespace) -> None:
     store, _secret = _open_v1_store(args)
     events = store.events()
     diagnostics = store.diagnostics()
+    heartbeats = store.heartbeats()
+    reviews = store.diagnostic_reviews()
+    runs = store.watch_runs()
     sessions = {event.source_session_id for event in events}
     diagnostic_total = sum(outcome.count for outcome in diagnostics)
+    today = datetime.now(UTC).date()
+    activation = store.continuity_policy_activated_at()
+    effective_date = policy_effective_date(activation)
 
     console.print(
         f"Store: [bold]{len(events)}[/bold] events, "
@@ -221,18 +240,44 @@ def _cmd_status(args: argparse.Namespace) -> None:
     console.print(_discovery_table(build_doctor_report(store)))
     coverage = build_evidence_coverage(
         events,
-        store.heartbeats(),
-        store.diagnostic_reviews(),
+        heartbeats,
+        reviews,
+        runs,
         window_days=EVIDENCE_WINDOW_DAYS,
-        until=datetime.now(UTC).date(),
+        until=today,
     )
     console.print(
-        f"Evidence: [green]{coverage.qualified_days}[/green] qualified, "
+        f"Live evidence: [green]{coverage.qualified_days}[/green] qualified, "
         f"[yellow]{coverage.incomplete_days}[/yellow] incomplete, "
         f"[dim]{coverage.idle_days}[/dim] idle "
-        f"(last {EVIDENCE_WINDOW_DAYS} days)"
+        f"(last {EVIDENCE_WINDOW_DAYS} UTC days)"
     )
     console.print(_evidence_table(coverage))
+
+    completed = build_evidence_coverage(
+        events,
+        heartbeats,
+        reviews,
+        runs,
+        window_days=EVIDENCE_WINDOW_DAYS,
+        until=today - timedelta(days=1),
+    )
+    if completed.closeout_passes_from(effective_date):
+        verdict = "[green]criteria pass[/green]"
+    else:
+        verdict = "[yellow]criteria do not pass[/yellow]"
+    if completed.days[0].day >= effective_date:
+        console.print(
+            f"Precommitted closeout ({completed.days[0].day.isoformat()} to "
+            f"{completed.days[-1].day.isoformat()} UTC): no incomplete day and at "
+            f"least {MIN_QUALIFIED_DAYS} qualified days — {verdict}"
+        )
+    else:
+        recorded_days = sum(day.day >= effective_date for day in completed.days)
+        console.print(
+            f"Precommitted closeout begins {effective_date.isoformat()} UTC: "
+            f"{recorded_days} of {EVIDENCE_WINDOW_DAYS} completed days recorded"
+        )
 
 
 def _cmd_doctor(args: argparse.Namespace) -> None:

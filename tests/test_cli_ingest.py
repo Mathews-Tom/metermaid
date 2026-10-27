@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 
 import pytest
 from pytest import MonkeyPatch
 
 from metermaid.cli import _positive_interval, _watch_loop, main
-from metermaid.domain import DiagnosticReview, NormalizedEvent, WatchHeartbeat
+from metermaid.domain import DiagnosticReview, NormalizedEvent, WatchHeartbeat, WatchRun
 from metermaid.state import load_or_create_secret, resolve_state_paths
 from metermaid.store import EventStore
 
@@ -231,6 +231,9 @@ def test_watch_loop_records_one_heartbeat_per_poll(
         if polls["count"] >= 3:
             raise KeyboardInterrupt()
 
+    monkeypatch.setattr(
+        "metermaid.cli.host_booted_at", lambda: base - timedelta(minutes=5)
+    )
     _watch_loop(store, secret, 30, sleep=_sleep, now=lambda: next(ticks))
 
     heartbeats = store.heartbeats()
@@ -238,6 +241,13 @@ def test_watch_loop_records_one_heartbeat_per_poll(
     assert {beat.run_id for beat in heartbeats} == {heartbeats[0].run_id}
     assert {beat.interval_seconds for beat in heartbeats} == {30}
     assert {beat.poll_seconds for beat in heartbeats} == {30}
+    assert store.watch_runs() == [
+        WatchRun(
+            run_id=heartbeats[0].run_id,
+            started_at=base,
+            booted_at=base - timedelta(minutes=5),
+        )
+    ]
 
 
 def test_status_reports_a_qualified_day_from_recorded_evidence(
@@ -286,12 +296,90 @@ def test_status_reports_a_qualified_day_from_recorded_evidence(
     )
 
     main()
-
     out = capsys.readouterr().out
+
     assert "Dogfood evidence" in out
     assert "qualified" in out
     assert now.date().isoformat() in out
+    assert "Precommitted closeout begins" in out
+    assert "0 of 14 completed days recorded" in out
     assert "8" * 64 not in out
+
+
+@pytest.mark.parametrize(("activation_days_ago", "eligible"), [(16, True), (7, False)])
+def test_status_uses_completed_days_and_persisted_policy_activation(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    activation_days_ago: int,
+    eligible: bool,
+) -> None:
+    """Today's incomplete activity cannot alter yesterday's formal verdict."""
+    today = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    moment = today - timedelta(days=activation_days_ago)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> Clock:
+            return cls.fromtimestamp(moment.timestamp(), tz)
+
+    monkeypatch.setattr("metermaid.store.datetime", Clock)
+    monkeypatch.setattr("metermaid.cli.datetime", Clock)
+    _use_fixture_home(monkeypatch, tmp_path)
+    data_dir = tmp_path / "state"
+    paths = resolve_state_paths(data_dir)
+    load_or_create_secret(paths)
+    store = EventStore(paths.database)
+    store.initialize()
+    moment = today
+    for offset in range(15):
+        day = (today - timedelta(days=14 - offset)).replace(hour=0)
+        store.commit_ingest(
+            [
+                NormalizedEvent(
+                    event_id=f"{offset:064x}",
+                    agent="codex",
+                    source_session_id="8" * 64,
+                    project_key="7" * 64,
+                    occurred_at=day + timedelta(hours=12),
+                    record_kind="usage",
+                    provenance="codex.token_count",
+                )
+            ],
+            [],
+            None,
+        )
+        if offset == 14:
+            continue
+        for hour in range(24):
+            store.record_heartbeat(
+                WatchHeartbeat(
+                    observed_at=day + timedelta(hours=hour),
+                    run_id="6" * 64,
+                    interval_seconds=3600,
+                )
+            )
+        store.record_diagnostic_review(
+            DiagnosticReview(
+                reviewed_at=day + timedelta(hours=12),
+                state_fingerprint="5" * 64,
+                diagnostic_count=0,
+            )
+        )
+    monkeypatch.setattr(
+        "sys.argv", ["metermaid", "status", "--data-dir", str(data_dir)]
+    )
+
+    main()
+
+    output = " ".join(capsys.readouterr().out.split())
+    assert "1 incomplete" in output
+    if eligible:
+        assert "2026-10-13 to 2026-10-26 UTC" in output
+        assert "criteria pass" in output
+    else:
+        assert "2026-10-21 UTC: 6 of 14 completed days recorded" in output
+        assert "criteria pass" not in output
 
 
 @pytest.mark.parametrize("bad_value", ["0", "-1", "-10"])

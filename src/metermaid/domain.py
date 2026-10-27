@@ -174,6 +174,28 @@ def _require_aware_utc(name: str, value: datetime) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class WatchRun:
+    """One watcher process start and optional measured host-boot instant.
+
+    A boot instant is collected only where the host platform can provide
+    it. Its absence preserves the normal strict continuity rule rather
+    than fabricating evidence for a restart.
+    """
+
+    run_id: str
+    started_at: datetime
+    booted_at: datetime | None
+
+    def __post_init__(self) -> None:
+        _require_opaque_identifier("run_id", self.run_id)
+        _require_aware_utc("started_at", self.started_at)
+        if self.booted_at is not None:
+            _require_aware_utc("booted_at", self.booted_at)
+            if self.booted_at > self.started_at:
+                raise ValueError("booted_at cannot be after started_at")
+
+
+@dataclass(frozen=True, slots=True)
 class WatchHeartbeat:
     """One recorded foreground-watcher poll, with no process detail.
 
