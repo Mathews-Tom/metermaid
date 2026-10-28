@@ -58,6 +58,12 @@ metermaid report
 | `export` | `--data-dir`, `--out` (default `metermaid_export.json`) | Writes the restricted aggregate JSON export; prints the field list and one sample row before writing. |
 | `import-legacy` | `--data-dir`, optional positional `LEGACY_DIR` (default `~/.metermaid/sessions`) | Explicitly imports v0.2 CSV history — see [Legacy v0.2 import](#legacy-v02-import). |
 
+## Progress feedback
+
+Long-running operations show transient Rich spinners with the current stage, including store initialization, ingestion, report aggregation, evidence calculations, and export writing. The watcher distinguishes ingesting from waiting for its next poll. These are activity indicators, not percentage-complete estimates.
+
+Progress is displayed only when standard error is an interactive terminal. Final results stay on standard output; redirecting standard error disables progress, keeping captured output free of animation.
+
 ## Session discovery
 
 `doctor`/`status` report discovery for four pilot agents. A root existing on disk is only a filesystem fact; an agent is `enabled` only when it also has a registered, fixture-backed adapter — currently all four.
