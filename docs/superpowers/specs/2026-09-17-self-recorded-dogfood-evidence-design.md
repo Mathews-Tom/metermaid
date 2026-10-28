@@ -2,16 +2,20 @@
 
 ## Status
 
-Approved design. This replaces the hand-written operational record that blocked two consecutive dogfood periods. Version 9 adds an exploratory, bounded inactive-gap derivation over the existing evidence; it does not reopen M5's `ITERATE` disposition, authorize M6, expand the stable command surface, or change how events are ingested, aggregated, or exported.
+Implemented as M5b, merged in PR #28. The runtime records measured foreground-watcher continuity and explicit diagnostic-review acknowledgements; schema version 9 and continuity policy version 1 preserve the activation boundary described below. The precommitted Oct 12–25 UTC formal window passed with 14 qualified days. This is a frozen historical closeout, not a requirement to maintain a passing rolling window forever.
+
+This specification preserves the design decisions and historical evidence windows. It does not reopen M5's `ITERATE` disposition, expand the seven-command surface, or change ingestion, reporting totals, or exports. M6 was subsequently authorized and implemented as a separate [developer-only local advisor](2026-09-04-local-schema-advisor-design.md); the earlier blocked extension is not a current M6 prohibition.
+
+Ordinary on-demand use requires neither continuous watching nor `doctor --acknowledge`. See the [operating runbook](../../dogfood-runbook.md#on-demand-operation) and [dogfood evidence summary](../../../README.md#dogfood-evidence). An incomplete rolling day assesses this formal collection protocol, not installation health or permission to use reports.
 
 ## Problem
 
-The owner dogfood runbook requires a human to write down two facts every day: that the foreground watcher was running, and that the day's diagnostics were reviewed. Both periods to date failed on that record rather than on the runtime.
+The original owner dogfood campaign required a human to record two facts every day: that the foreground watcher was running, and that the day's diagnostics were reviewed. The initial campaign and its extension could not establish their required coverage from that manual record:
 
-- M5's Aug 17–30 run was denied `STABLE` because historic manual inspection evidence was incomplete.
-- The Sep 2–15 evidence extension produced tracked-agent activity on 13 of 14 calendar days, yet inspection rows exist for only 3 dates and watcher attestation exists for 2.
+- M5's Aug 17–30 run was denied `STABLE` because historical manual inspection evidence was incomplete; its `ITERATE` disposition remains final.
+- The Sep 2–15 evidence extension lacked sufficient inspection and watcher attestation. It remains blocked rather than being retroactively certified.
 
-A protocol that has never once been satisfied is the defect. Retrying it unchanged predicts the same outcome, so the evidence a closeout depends on must be produced by the runtime as a side effect of normal use.
+Retrying that protocol unchanged would preserve the same evidence weakness. The operational record for a new formal campaign therefore became runtime-produced continuity evidence plus explicit human review acknowledgement, rather than retrospective recollection. This design does not turn the historical campaign protocol into an ordinary-use mandate.
 
 ## Decision
 
@@ -24,7 +28,7 @@ Coverage is reported through the existing `status` command. The stable seven-com
 
 ## Schema
 
-Schema version 6 added two tables through the established additive, atomic migration path. Version 7 added the measured `poll_seconds` column. Version 8 adds watcher-run boot evidence. Version 9 adds `continuity_policy_activations` and persists one immutable continuity-policy activation timestamp. Bounded inactive gaps remain derived at read time from the existing heartbeat and normalized-event timestamps; they add no stored gap rows or changes to historical evidence.
+Schema version 6 added two tables through the established additive, atomic migration path. Version 7 added the measured `poll_seconds` column. Version 8 added watcher-run boot evidence. Version 9 added `continuity_policy_activations` and persists one immutable continuity-policy activation timestamp. Bounded inactive gaps remain derived at read time from the existing heartbeat and normalized-event timestamps; they add no stored gap rows or changes to historical evidence. Persistence is implemented in [`store.py`](../../../src/metermaid/store.py), with pure coverage derivation in [`evidence.py`](../../../src/metermaid/evidence.py).
 
 ```sql
 CREATE TABLE watch_heartbeats (
@@ -58,7 +62,7 @@ CREATE TABLE continuity_policy_activations (
 
 `state_fingerprint` is derived through the machine-local secret over the sorted `(agent, discriminator, kind, count)` rows the acknowledged `doctor` invocation displayed. These tables hold only local runtime facts: no source record, prompt, tool argument, path, project name, or session identifier.
 
-`watch_runs.booted_at` is the host's measured UTC boot instant at watcher startup when the platform supplies one; its absence supplies no restart exemption. A continuity gap that exceeds its normal tolerance is accepted only when it crosses into a different watcher run and that later run's recorded boot instant is after the earlier heartbeat and no later than the later heartbeat. This exempts a verified system restart while preserving failure for sleep, an ordinary process restart, a restart on a platform without boot evidence, and a second restart after the same boot.
+`watch_runs.booted_at` is the host's measured UTC boot instant at watcher startup when the platform supplies one; its absence supplies no reboot exemption. An over-cadence gap qualifies for that exemption only when it crosses into a different watcher run and the recorded times satisfy `earlier heartbeat < later boot <= later run start <= later heartbeat`. Sleep, an ordinary process restart, a restart without boot evidence, and a second restart after the same boot do not establish a reboot boundary. Such a gap must independently meet the bounded inactive-gap rule below or remain unexplained.
 
 On Darwin, boot lookup invokes `/usr/sbin/sysctl` directly with a five-second timeout, independently of the terminal's `PATH`. Execution failures, timeouts, and malformed output remain explicit errors; they are not silently converted to absent boot evidence. Other platforms continue without a boot-based exemption.
 
@@ -76,18 +80,18 @@ Heartbeat pairs are evaluated chronologically across UTC midnight and window bou
 
 ## Behavior
 
-`watch` writes one heartbeat per poll as a side effect of its existing foreground loop. It gains no daemonization, process management, or signal handling.
+`watch` writes one heartbeat per completed ingest poll as a side effect of its existing foreground loop. It gains no daemonization, process management, or separate stop command; Ctrl+C stops that foreground loop.
 
-`doctor` is unchanged by default. With `--acknowledge` it prints the identical table and then records one review row bound to that exact displayed state. Acknowledging is therefore impossible without having produced the state being acknowledged, and a later change in diagnostics yields a different fingerprint rather than inheriting an old acknowledgement.
+`doctor` is unchanged by default. With `--acknowledge` it prints the same discovery/outcome tables, then records one review row bound to that exact displayed state and prints an acknowledgement confirmation. Acknowledging is therefore impossible without having produced the state being acknowledged, and a later change in diagnostics yields a different fingerprint rather than inheriting an old acknowledgement. The flag neither repairs nor suppresses diagnostics.
 
-`status` gains a live coverage section over a trailing window. Per day it reports event count, heartbeat count, first and last heartbeat, longest heartbeat gap, acknowledged-review count, accepted inactive-gap count, and a status label. Its formal verdict uses a separate trailing window whose final date is the preceding completed UTC day.
+`status` shows live coverage over a trailing window: per-day event and heartbeat counts, longest heartbeat gap, acknowledged-review count, accepted inactive-gap count, and status label. Its formal verdict uses a separate trailing fourteen-day window whose final date is the preceding completed UTC day. These readouts are implemented in [`cli.py`](../../../src/metermaid/cli.py); first and last heartbeat timestamps are not displayed as table columns.
 
 ## Coverage criterion
 
 Each day in the window is labeled exactly one of:
 
 - **idle** — no tracked-agent events were observed. Genuine inactivity is not a failure; Sep 14 2026 is precisely this case.
-- **qualified** — events were observed, at least one acknowledged review exists for that day, and every heartbeat gap is normal cadence, a verified system-restart boundary, or one accepted bounded inactive gap. A poll's real period is its configured interval plus the ingest work that poll performed, which on a large corpus dominates the interval outright; judging continuity against the interval alone mislabels a healthy watcher as incomplete. Each normal gap is judged against its own adjoining polls rather than the day's widest period, so one slow pass cannot silently excuse an unrelated interruption hours later. A heartbeat recorded before durations were measured carries no duration and falls back to its interval, which is all the evidence it holds.
+- **qualified** — events were observed, at least one acknowledged review exists for that day, and every heartbeat gap is normal cadence, a verified system-restart boundary, or one accepted bounded inactive gap. A poll's real period is its configured interval plus measured ingest duration; legacy heartbeats without duration fall back to the interval. Normal cadence permits a gap no larger than twice the slower of its two adjoining poll periods, not the day's widest period. Thus one slow pass cannot silently excuse an unrelated interruption hours later.
 - **incomplete** — events were observed but the review or continuity condition above is unmet.
 
 The label is computed from stored evidence only. Nothing infers watcher state from a process snapshot taken after the fact, and no label is derived from the absence of a ledger row.
@@ -127,7 +131,7 @@ Tests must prove:
 - The same day without a review is incomplete.
 - A heartbeat gap beyond tolerance makes an otherwise-reviewed day incomplete.
 - A verified host-reboot boundary between two watcher runs keeps an otherwise-reviewed day qualified.
-- A process-only restart and a sleep gap remain incomplete.
+- A process-only restart or sleep supplies no reboot exemption; an over-cadence gap must independently meet the bounded inactive-gap rule or remain incomplete.
 - A run whose polls each take far longer than the configured interval stays qualified, while a genuinely stopped watcher with equally slow polls is incomplete.
 - A version 7 database upgrades in place with its legacy heartbeats preserved and no fabricated reboot evidence.
 - A 30-minute-or-less gap containing no normalized event is qualified once and displayed as an inactive gap.
@@ -138,7 +142,7 @@ Tests must prove:
 - A version 8 database upgrades once to persist one immutable continuity-policy activation timestamp.
 - A formal verdict excludes the partial current UTC day and remains ineligible while its completed-day window contains any pre-activation date.
 - A day with no events is idle regardless of heartbeats or reviews.
-- `doctor` records no review without the flag and exactly one with it, printing the same table either way.
+- `doctor` records no review without the flag and exactly one with it, displaying the same discovery/outcome tables and adding only the acknowledgement confirmation.
 - `watch` records a heartbeat per poll, and repeated writes for one second stay idempotent.
 - A version 5 database upgrades in place with existing events, watermarks, and diagnostics intact.
 - `--help` still lists exactly the seven stable commands.
@@ -146,4 +150,6 @@ Tests must prove:
 
 ## Consequence for the blocked closeout
 
-The Sep 2–15 extension stays blocked and no disposition is fabricated for it. Sep 27–Oct 10 remains exploratory. Once policy activation is persisted, a fresh period can be measured from recorded evidence, and its closeout becomes a readout rather than a recollection.
+The Sep 2–15 extension stays blocked and no disposition is fabricated for it. Sep 27–Oct 10 remains exploratory because the bounded inactive-gap rule was chosen after a gap in that window was observed. Neither historical window was retroactively certified.
+
+With policy activation recorded, the separate Oct 12–25 UTC formal window passed with 14 qualified days under the precommitted rule: no incomplete day and at least ten qualified days. This completed M5b's measured closeout and enabled the subsequent M6 developer-advisor gate. The passing window is frozen; `status` continues to calculate a moving live window and the latest fourteen completed UTC days, so a later rolling failure neither alters the stored historical evidence nor reopens that result.

@@ -1,12 +1,24 @@
 # metermaid — System Overview
 
 **Repo:** `github.com/Mathews-Tom/metermaid`
-**Status:** Design expansion of an existing tracker (formerly `codetrack`)
-**Document date:** 2026-08-16
-**Audience:** Engineering leadership, prospective contributors, internal pilot participants
+**Status:** Completed v1 personal pilot; historical expansion proposal retained below
+**Original proposal date:** 2026-08-16; status reconciled 2026-10-29
+**Audience:** Personal-pilot users and contributors; historical leadership-facing vision
 **Companion:** [system design](design.md)
 
-> **Status: deferred design reference.** This document records promotion candidates beyond the approved v1 personal pilot. It is neither a shipped-capability inventory nor an implementation authority. Rate-limit reconstruction, throttle/stall claims, task classification, TUI, PATH guard, OpenTelemetry ingest, local-model features, the privacy-safe event store/export redesign, and offline enforcement remain unapproved until their explicit evidence gates pass.
+## Current product and implementation boundary
+
+The v1 personal pilot (M1–M6) is complete. Its seven commands are `ingest`, `watch`, `status`, `doctor`, `report`, `export`, and `import-legacy`. It reads local Claude Code, Codex, pi, and OMP usage into a privacy-safe SQLite store and provides observed-usage reporting plus restricted, allowlisted aggregate JSON export. Legacy CSV imports remain isolated history, not current normalized events.
+
+Use the canonical README for [purpose and status](../README.md#purpose-and-status), [everyday use](../README.md#everyday-use), [reporting limits](../README.md#reporting-limits), and [progress feedback](../README.md#progress-feedback). `ingest` is a bounded incremental pass; repeat it or run foreground `watch` for a backlog. Stop `watch` with Ctrl+C, not a stop command. Reports do not ingest, and `--data-dir` changes state storage, not discovery roots. Transient stage-labeled Rich spinners use terminal stderr only; they are neither speedups nor percent-complete estimates.
+
+Costs are source-reported and partial; missing counters are unavailable, not zero. Numeric totals sum known values only and do not establish complete counter coverage. Possible OMP source-generation overlap is flagged in reports, not deduplicated, and affected totals are non-authoritative, including exports. Export contains all current normalized events aggregated by agent, without filters, legacy rows, or an overlap warning in JSON; inspect an unfiltered report before relying on it. There are no productivity or billing claims. Ordinary use needs no collection campaign or acknowledgement. The frozen October 12–25 UTC formal window passed 14 qualified days; later rolling failures do not reopen it. See [dogfood evidence](../README.md#dogfood-evidence).
+
+The shipped [optional schema advisor](../README.md#optional-schema-advisor) is a developer-only `scripts/schema_advisor.py` workflow outside the seven commands. Explicit opt-in enables local loopback Ollama over value-free structures; advice does not change production parsing or persist results. It is not session/task classification. Completion of this pilot does not imply a public release or an approved successor.
+
+## Historical proposal — 2026-08-16
+
+Everything below records the original broader vision and its then-current v0.2 baseline, including tables, example commands, market claims, and proposed workflows. Present-tense language below is historical, not a shipped-capability inventory or implementation authority. Rate-limit reconstruction, throttle/stall accounting, task classification, TUI, PATH guard, OTel ingest, MCP summaries, recommendations, and the proposed offline-enforcement mechanisms remain deferred and unapproved. Privacy-safe SQLite storage and restricted aggregate export have shipped in the narrower v1 form above; the broader designs below are not their exact contracts.
 
 ---
 
@@ -29,8 +41,8 @@ Concretely it answers four questions no existing tool answers together:
 ### What it is not
 
 - Not an admin dashboard. There is no server, no org view, no manager rollup by default.
-- Not a cost tool by ambition. The current v0.2 runtime captures `costUSD` when the source reports it and otherwise uses its default pricing-table estimate. The target state narrows this to captured-only cost.
-- Not a productivity scorer. The target export schema is deliberately incapable of producing a per-developer "efficiency" number; current v0.2 CSV and JSON exports still carry the fields from which one could be derived.
+- Not a cost tool by ambition. At the proposal date, v0.2 captured `costUSD` when the source reported it and otherwise used its default pricing-table estimate. The completed v1 pilot uses source-reported cost only.
+- Not a productivity scorer. The proposal sought a restricted export boundary; v0.2 CSV and JSON exports still carried fields from which such scores could be derived. The completed v1 pilot instead exports only allowlisted per-agent aggregates, without endorsing productivity claims.
 
 ---
 
@@ -126,9 +138,9 @@ schema-restricted JSON document only when the developer runs it.
 | `metermaid` / `report` / `export` / `advise` | User-invoked | Analysis, export, recommendation |
 | `metermaid mcp` | Stdio MCP client | Expose usage summaries, session lists, and cost-window reads |
 
-### 3.4 What is already built
+### 3.4 Historical baseline at the proposal date
 
-metermaid currently provides `watch`, `stop`, `status`, `migrate`, `hook`, `backfill`, `consolidate`, `report`, `export`, `mcp`, and `heatmap` commands for Claude Code and Codex CLI sessions. It has polling discovery, two-layer deduplication, CSV snapshots, aggregate reporting, budget/nudge output, and CSV, JSON, Markdown, HTML, and OTLP export.
+At the August 2026 proposal date, the v0.2 predecessor provided `watch`, `stop`, `status`, `migrate`, `hook`, `backfill`, `consolidate`, `report`, `export`, `mcp`, and `heatmap` commands for Claude Code and Codex CLI sessions. It had polling discovery, two-layer deduplication, CSV snapshots, aggregate reporting, budget/nudge output, and CSV, JSON, Markdown, HTML, and OTLP export. The following table records that historical baseline and external reuse candidates, not current v1 commands or support.
 
 | Capability | Source | State |
 |---|---|---|
@@ -397,7 +409,7 @@ One keypress. Stored locally. Never exported unless the developer exports it.
 
 1. Is the rate-limit refusal record machine-parseable, and does it carry `reset_at`?
    Everything in the throttle model depends on this. One day of empirical work.
-2. Does Claude Code expose a statusline field for a quota numerator, denominator, or reset boundary? The current path captures context-window and cost figures only; the quota channel remains unverified.
+2. Does Claude Code expose a statusline field for a quota numerator, denominator, or reset boundary? The v0.2 path at the proposal date captured context-window and cost figures only; the proposed quota channel remained unverified.
 3. What is the actual T0 classifier accuracy against a hand-labeled set of 50 sessions?
    Determines whether tiers 2 and 3 are worth building at all.
 4. Does OTel's quota/limit signal carry anything the transcript does not? If so, the OTel

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "metermaid-cli"
 dynamic = ["version"]
-description = "Background usage tracker for Claude Code and Codex CLI sessions"
+description = "Local usage accounting for Claude Code, Codex CLI, Pi, and OMP"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ dependencies = [
 authors = [
     { name = "Tom" },
 ]
-keywords = ["claude", "codex", "cli", "usage", "metrics", "tokens"]
+keywords = ["claude", "codex", "pi", "omp", "cli", "usage", "metrics", "tokens"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",

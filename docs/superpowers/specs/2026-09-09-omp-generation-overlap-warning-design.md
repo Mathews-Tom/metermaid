@@ -2,7 +2,9 @@
 
 ## Status
 
-Approved direction; implementation gated on review of this written specification. This is a scope-limited M5 data-correctness corrective update. It does not change the completed M5 `ITERATE` disposition, authorize M6, deduplicate stored data, or expand Metermaid’s stable command surface.
+Implemented as a scope-limited M5 data-correctness corrective update in [`report_v1.py`](../../../src/metermaid/report_v1.py) and [`cli.py`](../../../src/metermaid/cli.py). This specification preserves the original detection decision and privacy boundary; it is not pending implementation approval. It does not change M5's completed `ITERATE` disposition, deduplicate stored data, or expand the seven-command surface. M6 was subsequently implemented independently as the [developer-only local advisor](2026-09-04-local-schema-advisor-design.md).
+
+The possible overlap remains a current reporting limitation, not a resolved deduplication problem. See [reporting limits](../../../README.md#reporting-limits) and the [operating runbook](../../dogfood-runbook.md#diagnostics-warnings-and-errors).
 
 ## Problem
 
@@ -59,7 +61,7 @@ The current report already receives normalized events and applies filters in mem
 
 ## Failure handling and performance
 
-The detector is deterministic and runs only over selected OMP usage events. It stores compact immutable tuples and one opaque source-session identifier per tuple during report construction; it retains no raw record text or raw identifiers. Empty and non-OMP selections are authoritative. A detector implementation failure is not caught or downgraded: report generation fails loudly rather than presenting totals as authoritative without a completed check.
+The detector is deterministic and runs only over selected OMP usage events. It stores compact immutable tuples and one opaque source-session identifier per tuple during report construction; it retains no raw record text or raw identifiers. Empty and non-OMP selections do not receive this overlap marker; absence of the marker is not a guarantee of complete coverage or billing authority. A detector implementation failure is not caught or downgraded: report generation fails loudly rather than presenting unchecked totals.
 
 ## Verification
 
@@ -76,4 +78,4 @@ Tests must prove:
 
 ## Dogfood disposition
 
-The local evidence-extension ledger records the confirmed data-correctness finding without claiming watcher state. After a scope-limited corrective PR passes the full gate, it receives an `ITERATE` corrective-update entry under the existing runbook. Until then, all-time OMP report totals remain non-authoritative.
+The local evidence-extension ledger recorded the data-correctness finding without claiming watcher state; it remains a historical record rather than a public operational snapshot. The corrective warning is now implemented. Selections meeting the overlap predicate still remain non-authoritative: shipping the warning did not remove records or establish unique logical usage totals. M5's `ITERATE` result, the blocked Sep 2–15 extension, and the separately passing Oct 12–25 UTC formal window are distinct historical outcomes; see the [measured evidence specification](2026-09-17-self-recorded-dogfood-evidence-design.md#consequence-for-the-blocked-closeout).

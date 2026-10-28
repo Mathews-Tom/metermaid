@@ -1,13 +1,9 @@
-"""Clean-install fixture smoke test for M5 PR1's install-readiness gate.
+"""Build a real wheel and exercise its seven commands with synthetic fixtures.
 
-Builds the real `metermaid-cli` wheel with `uv build`, installs it into a
-brand-new `uv venv`, and drives the installed `metermaid` console script
-against fixtures from a working directory outside the checkout with an
-isolated `HOME` and `--data-dir`. This proves the seven documented
-commands work end to end for a genuinely fresh install — never a
-source-tree `import metermaid` — and that installed state never leaks
-into (or reads from) the developer's real `~/.metermaid` or session
-directories.
+The application under test is the installed console script, run outside
+the checkout with an isolated ``HOME`` and ``--data-dir``. This module
+skips WSL before fixture setup: Windows-side discovery under ``/mnt/c/Users``
+is independent of ``HOME`` and could otherwise read real session sources.
 """
 
 from __future__ import annotations
@@ -22,10 +18,18 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("uv") is None,
-    reason="uv is required to build the wheel and create the install venv",
-)
+from metermaid.platform import is_wsl
+
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("uv") is None,
+        reason="uv is required to build the wheel and create the install venv",
+    ),
+    pytest.mark.skipif(
+        is_wsl(),
+        reason="WSL can discover real Windows-side sources despite isolated HOME",
+    ),
+]
 
 ROOT = Path(__file__).parent.parent
 LEGACY_FIXTURE = ROOT / "tests" / "fixtures" / "m4" / "legacy-supported.csv"
@@ -103,10 +107,10 @@ def installed_metermaid(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def isolated_environment(tmp_path: Path) -> Iterator[dict[str, str]]:
-    """An isolated HOME (seeded with one fixture record) plus PATH only.
+    """Seed a native fixture HOME; the module-level WSL guard runs first.
 
-    The real developer environment (`~/.metermaid`, `~/.claude`, `CODEX_HOME`,
-    `PYTHONPATH`, etc.) must never be visible to the installed console script.
+    Only HOME/PATH reach the installed program, without CODEX_HOME or
+    PYTHONPATH overrides.
     """
     home = tmp_path / "home"
     (home / ".claude" / "projects" / "proj1").mkdir(parents=True)

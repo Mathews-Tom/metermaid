@@ -1,5 +1,11 @@
 # OMP generation-overlap warning implementation plan
 
+## Status
+
+Implemented. This is the historical implementation sequence for the shipped [overlap-warning design](2026-09-09-omp-generation-overlap-warning-design.md), not an outstanding work queue or a daily operating procedure. The current code is in [`report_v1.py`](../../../src/metermaid/report_v1.py) and [`cli.py`](../../../src/metermaid/cli.py). Work items and verification commands below preserve the original engineering plan, not a claim that they were rerun for this documentation update.
+
+The warning retains all observed events; it does not resolve overlap or make flagged totals authoritative. See [current reporting limits](../../../README.md#reporting-limits). The personal pilot through M6 is complete, with no public release or approved successor scope.
+
 ## Goal
 
 Make `metermaid report` mark only the selected report as non-authoritative when OMP usage events with equal normalized semantics arrive from different source generations. Preserve all events and all numeric totals.
@@ -12,7 +18,7 @@ Make `metermaid report` mark only the selected report as non-authoritative when 
 - No row is removed, rewritten, or excluded. `status`, `doctor`, `export`, ingestion, database schema, and command names remain unchanged.
 - The CLI warning is fixed privacy-safe text, appears immediately before `Observed:`, and says totals retain all events without deduplication.
 
-## Work items
+## Historical work items
 
 ### 1. Extend the report contract
 

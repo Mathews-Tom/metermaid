@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from rich.console import Console
+from rich.status import Status
 from rich.table import Table
 
 from .discover import PILOT_AGENTS
@@ -37,6 +39,19 @@ from .state import load_or_create_secret, opaque_identifier, resolve_state_paths
 from .store import EventStore
 
 console = Console()
+_activity_console = Console(stderr=True)
+
+
+@contextmanager
+def _activity(description: str) -> Iterator[Status]:
+    """Show transient activity on terminal stderr, never in redirected output."""
+    status = _activity_console.status(description)
+    try:
+        if _activity_console.is_terminal:
+            status.start()
+        yield status
+    finally:
+        status.stop()
 
 
 def _resolve_v1_data_dir(args: argparse.Namespace) -> Path | None:
@@ -62,10 +77,11 @@ def _resolve_v1_data_dir(args: argparse.Namespace) -> Path | None:
 
 def _open_v1_store(args: argparse.Namespace) -> tuple[EventStore, bytes]:
     """Resolve the v1 state root and open its store with a loaded secret."""
-    paths = resolve_state_paths(_resolve_v1_data_dir(args))
-    secret = load_or_create_secret(paths)
-    store = EventStore(paths.database)
-    store.initialize()
+    with _activity("Opening local usage store..."):
+        paths = resolve_state_paths(_resolve_v1_data_dir(args))
+        secret = load_or_create_secret(paths)
+        store = EventStore(paths.database)
+        store.initialize()
     return store, secret
 
 
@@ -79,7 +95,9 @@ def _print_ingest_summary(summary: IngestSummary) -> None:
 
 def _cmd_ingest(args: argparse.Namespace) -> None:
     store, secret = _open_v1_store(args)
-    _print_ingest_summary(ingest_once(store, secret))
+    with _activity("Discovering sources and ingesting new records..."):
+        summary = ingest_once(store, secret)
+    _print_ingest_summary(summary)
 
 
 def _positive_interval(value: str) -> int:
@@ -151,7 +169,9 @@ def _watch_loop(
     try:
         while True:
             started_at = clock()
-            _print_ingest_summary(ingest_once(store, secret))
+            with _activity("Discovering sources and ingesting new records..."):
+                summary = ingest_once(store, secret)
+            _print_ingest_summary(summary)
             observed_at = clock()
             store.record_heartbeat(
                 WatchHeartbeat(
@@ -161,7 +181,8 @@ def _watch_loop(
                     poll_seconds=int((observed_at - started_at).total_seconds()),
                 )
             )
-            wait(interval)
+            with _activity("Waiting for the next ingest poll (Ctrl+C to stop)..."):
+                wait(interval)
     except KeyboardInterrupt:
         console.print("[dim]Stopped[/dim]")
 
@@ -221,31 +242,38 @@ def _evidence_table(coverage: EvidenceCoverage) -> Table:
 
 def _cmd_status(args: argparse.Namespace) -> None:
     store, _secret = _open_v1_store(args)
-    events = store.events()
-    diagnostics = store.diagnostics()
-    heartbeats = store.heartbeats()
-    reviews = store.diagnostic_reviews()
-    runs = store.watch_runs()
-    sessions = {event.source_session_id for event in events}
-    diagnostic_total = sum(outcome.count for outcome in diagnostics)
-    today = datetime.now(UTC).date()
-    activation = store.continuity_policy_activated_at()
-    effective_date = policy_effective_date(activation)
+    with _activity("Loading usage events...") as activity:
+        events = store.events()
+        activity.update("Loading diagnostic counts...")
+        diagnostics = store.diagnostics()
+        activity.update("Loading watcher and review history...")
+        heartbeats = store.heartbeats()
+        reviews = store.diagnostic_reviews()
+        runs = store.watch_runs()
+        activity.update("Summarizing stored activity...")
+        sessions = {event.source_session_id for event in events}
+        diagnostic_total = sum(outcome.count for outcome in diagnostics)
+        today = datetime.now(UTC).date()
+        activation = store.continuity_policy_activated_at()
+        effective_date = policy_effective_date(activation)
 
     console.print(
         f"Store: [bold]{len(events)}[/bold] events, "
         f"[cyan]{len(sessions)}[/cyan] sessions, "
         f"[dim]{diagnostic_total}[/dim] diagnostics"
     )
-    console.print(_discovery_table(build_doctor_report(store)))
-    coverage = build_evidence_coverage(
-        events,
-        heartbeats,
-        reviews,
-        runs,
-        window_days=EVIDENCE_WINDOW_DAYS,
-        until=today,
-    )
+    with _activity("Checking source discovery and parse outcomes..."):
+        doctor = build_doctor_report(store)
+    console.print(_discovery_table(doctor))
+    with _activity("Calculating live evidence coverage..."):
+        coverage = build_evidence_coverage(
+            events,
+            heartbeats,
+            reviews,
+            runs,
+            window_days=EVIDENCE_WINDOW_DAYS,
+            until=today,
+        )
     console.print(
         f"Live evidence: [green]{coverage.qualified_days}[/green] qualified, "
         f"[yellow]{coverage.incomplete_days}[/yellow] incomplete, "
@@ -254,14 +282,15 @@ def _cmd_status(args: argparse.Namespace) -> None:
     )
     console.print(_evidence_table(coverage))
 
-    completed = build_evidence_coverage(
-        events,
-        heartbeats,
-        reviews,
-        runs,
-        window_days=EVIDENCE_WINDOW_DAYS,
-        until=today - timedelta(days=1),
-    )
+    with _activity("Calculating completed-day evidence coverage..."):
+        completed = build_evidence_coverage(
+            events,
+            heartbeats,
+            reviews,
+            runs,
+            window_days=EVIDENCE_WINDOW_DAYS,
+            until=today - timedelta(days=1),
+        )
     if completed.closeout_passes_from(effective_date):
         verdict = "[green]criteria pass[/green]"
     else:
@@ -282,7 +311,8 @@ def _cmd_status(args: argparse.Namespace) -> None:
 
 def _cmd_doctor(args: argparse.Namespace) -> None:
     store, secret = _open_v1_store(args)
-    report = build_doctor_report(store)
+    with _activity("Checking source discovery and parse outcomes..."):
+        report = build_doctor_report(store)
 
     console.print(_discovery_table(report))
 
@@ -431,7 +461,8 @@ def _print_legacy_import_summary(summary: LegacyImportSummary) -> None:
 
 def _cmd_import_legacy(args: argparse.Namespace) -> None:
     store, secret = _open_v1_store(args)
-    summary = import_legacy_snapshots(store, secret, args.legacy_dir)
+    with _activity("Reading and importing legacy snapshots..."):
+        summary = import_legacy_snapshots(store, secret, args.legacy_dir)
     _print_legacy_import_summary(summary)
 
 
@@ -444,24 +475,29 @@ def _cmd_report(args: argparse.Namespace) -> None:
         model=args.model,
         project_key=args.project_key,
     )
-    observed = build_report(store.events(), filter_)
+    with _activity("Loading and aggregating usage events..."):
+        observed = build_report(store.events(), filter_)
     _print_observed_report(observed)
-    _print_legacy_history(build_legacy_report(store.legacy_snapshots()))
+    with _activity("Loading and aggregating legacy history..."):
+        legacy = build_legacy_report(store.legacy_snapshots())
+    _print_legacy_history(legacy)
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
     store, _secret = _open_v1_store(args)
-    document = build_export(store.events())
+    with _activity("Loading and aggregating usage events for export..."):
+        document = build_export(store.events())
     console.print(export_preview(document))
     out = Path(args.out)
-    write_export(document, out)
+    with _activity("Writing aggregate export..."):
+        write_export(document, out)
     console.print(f"Exported [bold]{len(document.rows)}[/bold] rows -> {out}")
 
 
 def main() -> None:
     p = argparse.ArgumentParser(
         prog="metermaid",
-        description="Session metrics watcher for Claude Code & Codex CLI",
+        description="Local usage accounting for Claude Code, Codex CLI, Pi, and OMP",
     )
     p.add_argument("--data-dir", type=Path, default=SESSIONS_DIR)
     sub = p.add_subparsers(dest="cmd", required=True)

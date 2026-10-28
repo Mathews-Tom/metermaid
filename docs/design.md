@@ -1,10 +1,22 @@
 # metermaid — System Design
 
 **Repo:** `github.com/Mathews-Tom/metermaid`
-**Document date:** 2026-08-16
+**Original proposal date:** 2026-08-16; status reconciled 2026-10-29
 **Companion:** [system overview](overview.md)
 
-> **Status: deferred design reference.** This document is not the approved v1 implementation scope or a statement of shipped behavior. Its rate-limit, stall, classifier, TUI, PATH-guard, OpenTelemetry ingest, local-model, privacy-safe event store/export, and offline-enforcement proposals require their stated evidence gates before promotion.
+## Current implementation boundary
+
+The v1 personal pilot (M1–M6) is complete. Current usage and limits are maintained in the README: [purpose and status](../README.md#purpose-and-status), [everyday use](../README.md#everyday-use), [reporting limits](../README.md#reporting-limits), and [progress feedback](../README.md#progress-feedback).
+
+The seven commands are `ingest`, `watch`, `status`, `doctor`, `report`, `export`, and `import-legacy`. The pilot uses privacy-safe SQLite persistence, deterministic observed-usage reporting, isolated legacy history, and restricted per-agent aggregate JSON export. Costs are source-reported and partial; missing counters remain unavailable, and numeric totals sum known values without proving complete coverage. Possible OMP source-generation overlap is flagged in reports rather than deduplicated, making affected totals non-authoritative, including exports. Export aggregates all current normalized events by agent, with no filters, legacy rows, or overlap warning in its JSON; inspect an unfiltered report before relying on it. These are not productivity or billing measurements.
+
+`ingest` is one bounded incremental pass; repeat it or use foreground `watch` for a backlog. Ctrl+C stops the watcher; there is no managed daemon or stop command. Reporting does not ingest, and `--data-dir` changes state storage only. Stage-labeled Rich activity indicators are transient terminal-stderr feedback, disabled for redirected stderr; results stay on stdout. They do not estimate percentage complete or speed up ingestion.
+
+The shipped [developer schema advisor](../README.md#optional-schema-advisor) (`scripts/schema_advisor.py`) is separate from these commands: explicit opt-in, local loopback Ollama, value-free structures, no persisted advice, and no production parser changes. It does not implement the session classifier proposed below. Ordinary use requires no evidence campaign or acknowledgement. The frozen October 12–25 UTC window passed 14 qualified days; see [dogfood evidence](../README.md#dogfood-evidence). Later rolling failures do not reopen that window. No public release or successor scope is implied by pilot completion.
+
+## Historical design proposal — 2026-08-16
+
+All numbered sections below, including their tables, data models, command examples, and unchanged Mermaid diagrams, preserve the original proposal and its v0.2 baseline. Their present-tense assertions are historical design language, not current implementation contracts or verified diagrams. Rate-limit/window reconstruction, stall accounting, session/task classification, TUI, PATH guard, OTel ingest, MCP, recommendations, DuckDB analysis, and the proposed offline-enforcement mechanisms remain deferred and unapproved. SQLite storage and restricted export have shipped in narrower v1 forms; their exact implementation is not the proposed schema below.
 
 ---
 
@@ -135,8 +147,7 @@ SQLite in WAL mode as system of record; DuckDB attached read-only for analysis.
 Hot path stays boring; analysis path gets columnar speed. Using DuckDB alone would put a
 single-writer OLAP engine underneath a live tailer, which is the wrong shape.
 
-This replaces metermaid's current CSV-as-store model. CSV survives as an export format
-only.
+This proposed replacing the v0.2 CSV-as-store model while keeping CSV export. The completed v1 pilot instead uses SQLite with restricted aggregate JSON export; DuckDB analysis and the proposed TUI are not shipped.
 
 ### 2.2 Watermarking
 
@@ -197,7 +208,7 @@ Two invariants that matter more than the field list:
 | `stalls` | refusal event | blocked_at, reset_at, mid_task, resume info, `answered` |
 | `composition` | session and turn | observation/action/prose/thinking/cache token split |
 | `classifications` | session | bin distribution, primary_bin, margin, provenance |
-| `statusline` | debounced sample | Unverified quota/reset fields; current v0.2 captures context-window and cost only |
+| `statusline` | debounced sample | Unverified quota/reset fields; the v0.2 baseline at the proposal date captured context-window and cost only |
 
 `weeks` is keyed on `cap_scope` because Max and Team plans carry two weekly caps — one
 across all models, one Sonnet-only. A developer can be weekly-blocked on Sonnet with
@@ -403,9 +414,9 @@ decorative.
 
 ## 8. Attribution: main / subagent / headless
 
-Current v0.2 already separates Claude main-chain and sidechain usage, persists sidechain totals, and renders them separately. The remaining work is a headless detector and Codex sidechain coverage.
+At the proposal date, v0.2 separated Claude main-chain and sidechain usage, persisted sidechain totals, and rendered them separately. The table below preserves that historical baseline and proposed detection work, not the completed v1 attribution contract.
 
-| Value | Current state | Target detection |
+| Value | August 2026 baseline | Proposed detection |
 |---|---|---|
 | `headless` | Unbuilt | Session with zero interactive user turns, or no statusline hook ever fired for it |
 | `subagent` | Built for Claude; zeroed for Codex | Turns originating from a spawned agent context rather than the session root |
@@ -461,7 +472,7 @@ remaining budget, and make silence the default.
 Both properties are claims a security review will test. Assertion in a README is not
 enforcement.
 
-**Current v0.2 caveat:** CSV snapshots and generic CSV/JSON exports persist raw project paths and second-resolution timestamps. The guarantees below describe the deferred v1 store and export boundary, not current behavior.
+**Historical v0.2 caveat:** CSV snapshots and generic CSV/JSON exports persisted raw project paths and second-resolution timestamps. The completed v1 pilot has shipped privacy-safe SQLite persistence and allowlisted aggregate JSON export. The models, flags, tests, and offline mechanisms below remain the original proposal, not an exact description of that implementation; in particular, they do not authorize session classification or imply the proposed socket guard exists.
 
 ### 10.1 Privacy by construction
 
