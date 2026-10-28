@@ -1,10 +1,9 @@
 """Build a real wheel and exercise its seven commands with synthetic fixtures.
 
-The installed console script runs outside the checkout with an isolated
-``HOME`` and ``--data-dir``, rather than importing the source tree directly.
-This isolates native-home state and sources. On WSL, Windows-side discovery
-under ``/mnt/c/Users`` is independent of ``HOME`` and remains enabled.
-Run these source-reading tests only without real Windows-side roots visible.
+The application under test is the installed console script, run outside
+the checkout with an isolated ``HOME`` and ``--data-dir``. This module
+skips WSL before fixture setup: Windows-side discovery under ``/mnt/c/Users``
+is independent of ``HOME`` and could otherwise read real session sources.
 """
 
 from __future__ import annotations
@@ -19,10 +18,18 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("uv") is None,
-    reason="uv is required to build the wheel and create the install venv",
-)
+from metermaid.platform import is_wsl
+
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("uv") is None,
+        reason="uv is required to build the wheel and create the install venv",
+    ),
+    pytest.mark.skipif(
+        is_wsl(),
+        reason="WSL can discover real Windows-side sources despite isolated HOME",
+    ),
+]
 
 ROOT = Path(__file__).parent.parent
 LEGACY_FIXTURE = ROOT / "tests" / "fixtures" / "m4" / "legacy-supported.csv"
@@ -100,10 +107,10 @@ def installed_metermaid(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def isolated_environment(tmp_path: Path) -> Iterator[dict[str, str]]:
-    """Seed a fixture HOME and pass only HOME/PATH to the installed program.
+    """Seed a native fixture HOME; the module-level WSL guard runs first.
 
-    CODEX_HOME and PYTHONPATH overrides are absent. This does not disable
-    Windows-side source discovery on WSL.
+    Only HOME/PATH reach the installed program, without CODEX_HOME or
+    PYTHONPATH overrides.
     """
     home = tmp_path / "home"
     (home / ".claude" / "projects" / "proj1").mkdir(parents=True)

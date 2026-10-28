@@ -232,7 +232,7 @@ uv sync --all-groups --locked --python 3.11
 uv run ruff check . && uv run ruff format --check . && uv run mypy --strict src tests && uv run pytest
 ```
 
-Use an isolated `HOME`, unset `CODEX_HOME`, and an alternate state root for source-reading smokes; `--data-dir` alone still discovers your normal sources. On WSL, discovery also checks the Windows-side home under `/mnt/c/Users` independently of `HOME`, so run these smokes only in an environment without real Windows-side source roots. The clean-install test builds a wheel, installs it into a fresh environment, and exercises the seven-command workflow with synthetic fixtures; its `HOME` isolation does not disable that additional WSL discovery.
+Use an isolated `HOME`, unset `CODEX_HOME`, and an alternate state root for source-reading smokes; `--data-dir` alone still discovers your normal sources. On WSL, discovery also checks the Windows-side home under `/mnt/c/Users` independently of `HOME`, so run manual source-reading smokes only in an environment without real Windows-side source roots. The clean-install tests build a wheel and exercise its seven commands with synthetic fixtures on non-WSL hosts; they skip on WSL before fixture setup or installed-CLI execution to avoid reading real Windows-side sources.
 
 Schema evidence and fixtures follow [the fixture policy](tests/fixtures/POLICY.md). Unsupported records need a human-reviewed redacted fixture, a deterministic mapping/test, and an adapter-revision replay where required; advisor categories are not fixtures or correctness evidence.
 
