@@ -57,6 +57,8 @@ From the checkout, prefix each command with `uv run`, for example `uv run meterm
 
 `ingest` reads one bounded batch per discovered file, then exits. A first run can import older records still present on disk, not just activity since installation. Repeat `ingest` to catch up with a large backlog. Subsequent passes resume from stored complete-line offsets; they do not intentionally recount unchanged records from the same source generation. An incomplete final line waits until it is newline-terminated.
 
+A single JSONL record, including its terminating newline, must fit in the 16 MiB per-file read batch. A larger record leaves that file's complete-line offset stuck before the record; repeated passes cannot reach it or later records in that file. This is an ingestion limit, not a backlog that additional polling resolves.
+
 `report`, `status`, `doctor`, and `export` do not ingest new source records. Refresh with `ingest` first when you need current observations. Source files deleted before collection cannot be recovered by Metermaid.
 
 Continuous collection is optional:
@@ -230,7 +232,7 @@ uv sync --all-groups --locked --python 3.11
 uv run ruff check . && uv run ruff format --check . && uv run mypy --strict src tests && uv run pytest
 ```
 
-Use an isolated `HOME`, unset `CODEX_HOME`, and an alternate state root for source-reading smokes; `--data-dir` alone still discovers your normal sources. The existing clean-install test builds a wheel, installs it into a fresh environment, and exercises the seven-command workflow without personal data.
+Use an isolated `HOME`, unset `CODEX_HOME`, and an alternate state root for source-reading smokes; `--data-dir` alone still discovers your normal sources. On WSL, discovery also checks the Windows-side home under `/mnt/c/Users` independently of `HOME`, so run these smokes only in an environment without real Windows-side source roots. The clean-install test builds a wheel, installs it into a fresh environment, and exercises the seven-command workflow with synthetic fixtures; its `HOME` isolation does not disable that additional WSL discovery.
 
 Schema evidence and fixtures follow [the fixture policy](tests/fixtures/POLICY.md). Unsupported records need a human-reviewed redacted fixture, a deterministic mapping/test, and an adapter-revision replay where required; advisor categories are not fixtures or correctness evidence.
 

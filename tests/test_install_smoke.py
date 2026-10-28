@@ -1,13 +1,10 @@
-"""Clean-install fixture smoke test for M5 PR1's install-readiness gate.
+"""Build a real wheel and exercise its seven commands with synthetic fixtures.
 
-Builds the real `metermaid-cli` wheel with `uv build`, installs it into a
-brand-new `uv venv`, and drives the installed `metermaid` console script
-against fixtures from a working directory outside the checkout with an
-isolated `HOME` and `--data-dir`. This proves the seven documented
-commands work end to end for a genuinely fresh install — never a
-source-tree `import metermaid` — and that installed state never leaks
-into (or reads from) the developer's real `~/.metermaid` or session
-directories.
+The installed console script runs outside the checkout with an isolated
+``HOME`` and ``--data-dir``, rather than importing the source tree directly.
+This isolates native-home state and sources. On WSL, Windows-side discovery
+under ``/mnt/c/Users`` is independent of ``HOME`` and remains enabled.
+Run these source-reading tests only without real Windows-side roots visible.
 """
 
 from __future__ import annotations
@@ -103,10 +100,10 @@ def installed_metermaid(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def isolated_environment(tmp_path: Path) -> Iterator[dict[str, str]]:
-    """An isolated HOME (seeded with one fixture record) plus PATH only.
+    """Seed a fixture HOME and pass only HOME/PATH to the installed program.
 
-    The real developer environment (`~/.metermaid`, `~/.claude`, `CODEX_HOME`,
-    `PYTHONPATH`, etc.) must never be visible to the installed console script.
+    CODEX_HOME and PYTHONPATH overrides are absent. This does not disable
+    Windows-side source discovery on WSL.
     """
     home = tmp_path / "home"
     (home / ".claude" / "projects" / "proj1").mkdir(parents=True)
