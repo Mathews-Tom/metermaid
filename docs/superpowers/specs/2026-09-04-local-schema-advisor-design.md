@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved design. This document defines a development-only analysis aid. It does not authorize a Metermaid runtime feature, new stable CLI command, parser expansion, or change to the completed M5 disposition.
+Implemented as the M6 developer-only aid in [`scripts/schema_advisor.py`](../../../scripts/schema_advisor.py), not as an eighth stable CLI command or an automatically enabled runtime feature. The personal pilot through M6 is complete; no public release or successor scope is approved. The design and human promotion boundary below remain the contract: no automatic parser expansion, persistence, or change to the completed M5 disposition. See [current optional-advisor usage](../../../README.md#optional-schema-advisor).
 
 ## Goal
 
@@ -26,7 +26,7 @@ Out of scope:
 - Metermaid's normal `ingest`, `watch`, `status`, `doctor`, `report`, `export`, or `import-legacy` behavior.
 - Automatic adapter changes, event writes, diagnostic suppression, database schema changes, model downloading, background service operation, or telemetry.
 - Sending any data to a remote endpoint, accepting arbitrary HTTP hosts, model authentication, or persisting the model's output.
-- Reopening M5 or adding deferred capability work during the Sep 2–15 evidence-only extension.
+- Reopening M5. At design time, the Sep 2–15 evidence-only extension also prohibited deferred capability work; that historical restriction is not a statement that M6 remains unauthorized today.
 
 ## Configuration
 
@@ -42,7 +42,7 @@ model = "gemma4:12b-mlx"
 timeout_seconds = 30
 ```
 
-`endpoint` must be an `http` URL whose hostname resolves syntactically to `127.0.0.1`, `localhost`, or `::1`, and whose path is exactly Ollama's `/api/generate`. The advisor rejects every other endpoint before opening a socket. `model` must be non-empty. `timeout_seconds` must be an integer in the closed interval 1–120.
+`endpoint` must be an `http` URL with the literal host `127.0.0.1`, `localhost`, or `[::1]` and the exact path `/api/generate`. An optional port must be in 1–65535; credentials, queries, fragments, and other hosts or paths are rejected before a socket is opened. `model` must be non-empty. `timeout_seconds` must be an integer in the closed interval 1–120.
 
 The configured model selector is control-plane configuration, not a source-derived model label. Transcript model values never enter a prompt or terminal row. The transport connects directly to loopback, including IPv4 for `localhost`, without proxy-environment routing or redirects.
 
@@ -134,4 +134,4 @@ Tests must demonstrate:
 
 ## M5 status
 
-M5's Aug 17–30 dogfood period is complete and its `ITERATE` disposition remains final. The Sep 2–15 evidence-only extension closed as blocked; it is not retroactively certified. M5b merged in PR #28, and the separately recorded Oct 12–25 UTC formal candidate passes from stored evidence. The M6 design gate now authorizes this isolated developer aid under the unchanged local-only, value-free, no-persistence boundary.
+M5's Aug 17–30 dogfood period is complete and its `ITERATE` disposition remains final. The Sep 2–15 evidence-only extension closed as blocked; it is not retroactively certified. M5b merged in PR #28. The separately recorded Oct 12–25 UTC formal window passed with 14 qualified days under the precommitted measured policy; later rolling coverage does not reopen that frozen closeout. That result enabled the M6 gate, and the isolated developer aid is now implemented under the unchanged local-only, value-free, no-persistence boundary. Sep 27–Oct 10 remains exploratory. See the [evidence design and closeout](2026-09-17-self-recorded-dogfood-evidence-design.md#consequence-for-the-blocked-closeout).

@@ -7,3 +7,5 @@ Use `uv run python scripts/audit_source_schema.py <source-jsonl>` only to inspec
 Create committed redacted fixture records with `tests.fixture_helpers.redacted_record`. It accepts field names only and replaces every value with `<redacted>`. A reviewer remains responsible for confirming that field names and any intentionally synthetic values reveal no private information.
 
 Reject malformed JSON and non-object records during audit. Do not infer a replacement record shape.
+
+The optional developer schema advisor is a separate [value-free triage aid](../../docs/superpowers/specs/2026-09-04-local-schema-advisor-design.md), not a fixture generator or parser authority. A `possible-usage-shape` category does not prove a counter mapping. Promotion still requires a human-reviewed redacted fixture, a deterministic adapter contract/regression test, a narrow mapping, semantic-revision replay where required, and the existing verification gate. Never copy model rationale or personal source records into fixtures.

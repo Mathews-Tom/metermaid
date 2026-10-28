@@ -497,7 +497,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(
         prog="metermaid",
-        description="Session metrics watcher for Claude Code & Codex CLI",
+        description="Local usage accounting for Claude Code, Codex CLI, Pi, and OMP",
     )
     p.add_argument("--data-dir", type=Path, default=SESSIONS_DIR)
     sub = p.add_subparsers(dest="cmd", required=True)
